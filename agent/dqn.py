@@ -24,18 +24,38 @@ class DQNAgent:
         self.state_size = state_size
         self.action_size = action_size
 
+        # --------------------------------------------------
+        # RL parameters
+        # --------------------------------------------------
+
         self.gamma = gamma
 
+        # Exploration
         self.epsilon = 1.0
         self.epsilon_min = 0.05
-        self.epsilon_decay = 0.9995
+
+        # Epsilon will decay over TRAINING STEPS,
+        # not exponentially on every train_step().
+        self.epsilon_decay_steps = 50_000
+
+        # --------------------------------------------------
+        # Training
+        # --------------------------------------------------
 
         self.batch_size = batch_size
+
+        # --------------------------------------------------
+        # Main network
+        # --------------------------------------------------
 
         self.model = DQN(
             state_size=state_size,
             action_size=action_size
         )
+
+        # --------------------------------------------------
+        # Target network
+        # --------------------------------------------------
 
         self.target_model = DQN(
             state_size=state_size,
@@ -48,22 +68,48 @@ class DQNAgent:
 
         self.target_model.eval()
 
+        # Update target network periodically
         self.target_update_frequency = 1000
+
         self.training_steps = 0
+
+        # --------------------------------------------------
+        # Optimizer
+        # --------------------------------------------------
 
         self.optimizer = optim.Adam(
             self.model.parameters(),
             lr=learning_rate
         )
 
+        # Huber loss is more stable for DQN
         self.loss_fn = nn.SmoothL1Loss()
+
+        # --------------------------------------------------
+        # Replay buffer
+        # --------------------------------------------------
 
         self.memory = ReplayBuffer(buffer_size)
 
+    # ======================================================
+    # ACTION SELECTION
+    # ======================================================
+
     def choose_action(self, state):
 
+        # ----------------------------------------------
+        # Exploration
+        # ----------------------------------------------
+
         if random.random() < self.epsilon:
-            return random.randrange(self.action_size)
+
+            return random.randrange(
+                self.action_size
+            )
+
+        # ----------------------------------------------
+        # Exploitation
+        # ----------------------------------------------
 
         state_tensor = torch.tensor(
             state,
@@ -72,12 +118,18 @@ class DQNAgent:
 
         with torch.no_grad():
 
-            q_values = self.model(state_tensor)
+            q_values = self.model(
+                state_tensor
+            )
 
         return torch.argmax(
             q_values,
             dim=1
         ).item()
+
+    # ======================================================
+    # REPLAY MEMORY
+    # ======================================================
 
     def remember(
         self,
@@ -96,16 +148,59 @@ class DQNAgent:
             done
         )
 
+    # ======================================================
+    # EPSILON UPDATE
+    # ======================================================
+
+    def update_epsilon(self):
+
+        if self.training_steps >= self.epsilon_decay_steps:
+
+            self.epsilon = self.epsilon_min
+
+            return
+
+        progress = (
+            self.training_steps
+            / self.epsilon_decay_steps
+        )
+
+        self.epsilon = (
+            1.0
+            - progress
+            * (1.0 - self.epsilon_min)
+        )
+
+        self.epsilon = max(
+            self.epsilon,
+            self.epsilon_min
+        )
+
+    # ======================================================
+    # TRAINING
+    # ======================================================
+
     def train_step(self):
 
+        # --------------------------------------------------
+        # Wait until replay buffer has enough samples
+        # --------------------------------------------------
+
         if len(self.memory) < self.batch_size:
+
             return None
+
+        # --------------------------------------------------
+        # Sample experience
+        # --------------------------------------------------
 
         batch = self.memory.sample(
             self.batch_size
         )
 
-        states, actions, rewards, next_states, dones = zip(*batch)
+        states, actions, rewards, next_states, dones = zip(
+            *batch
+        )
 
         states = torch.tensor(
             np.array(states),
@@ -132,38 +227,69 @@ class DQNAgent:
             dtype=torch.float32
         )
 
-        current_q_values = self.model(states)
+        # ==================================================
+        # CURRENT Q VALUES
+        # ==================================================
+
+        current_q_values = self.model(
+            states
+        )
 
         current_q_values = current_q_values.gather(
             1,
             actions.unsqueeze(1)
         ).squeeze(1)
 
+        # ==================================================
+        # DOUBLE DQN TARGET
+        # ==================================================
+
         with torch.no_grad():
 
-            next_q_values = self.target_model(
+            # Main network chooses the best next action
+            next_actions = self.model(
                 next_states
+            ).argmax(
+                dim=1,
+                keepdim=True
             )
 
-            max_next_q_values = next_q_values.max(
-                dim=1
-            ).values
+            # Target network evaluates that action
+            next_q_values = self.target_model(
+                next_states
+            ).gather(
+                1,
+                next_actions
+            ).squeeze(1)
+
+        # ==================================================
+        # BELLMAN TARGET
+        # ==================================================
 
         targets = rewards + (
             self.gamma
-            * max_next_q_values
+            * next_q_values
             * (1 - dones)
         )
+
+        # ==================================================
+        # LOSS
+        # ==================================================
 
         loss = self.loss_fn(
             current_q_values,
             targets
         )
 
+        # ==================================================
+        # BACKPROPAGATION
+        # ==================================================
+
         self.optimizer.zero_grad()
 
         loss.backward()
 
+        # Prevent exploding gradients
         torch.nn.utils.clip_grad_norm_(
             self.model.parameters(),
             max_norm=1.0
@@ -173,34 +299,58 @@ class DQNAgent:
 
         self.training_steps += 1
 
-        if self.training_steps % self.target_update_frequency == 0:
+        # ==================================================
+        # UPDATE TARGET NETWORK
+        # ==================================================
+
+        if (
+            self.training_steps
+            % self.target_update_frequency
+            == 0
+        ):
 
             self.target_model.load_state_dict(
                 self.model.state_dict()
             )
 
-            print("Target network updated.")
-
-        if self.epsilon > self.epsilon_min:
-
-            self.epsilon *= self.epsilon_decay
-
-            self.epsilon = max(
-                self.epsilon,
-                self.epsilon_min
+            print(
+                "[DQN] Target network updated."
             )
+
+        # ==================================================
+        # UPDATE EPSILON
+        # ==================================================
+
+        self.update_epsilon()
 
         return loss.item()
 
+
+# ==========================================================
+# BASIC TEST
+# ==========================================================
 
 if __name__ == "__main__":
 
     agent = DQNAgent()
 
-    print("DQN Agent created.")
+    print()
+    print("=" * 50)
+    print("DQN Agent Test")
+    print("=" * 50)
 
     print(
-        "Epsilon:",
+        "State size:",
+        agent.state_size
+    )
+
+    print(
+        "Action size:",
+        agent.action_size
+    )
+
+    print(
+        "Initial epsilon:",
         agent.epsilon
     )
 
@@ -208,6 +358,10 @@ if __name__ == "__main__":
         "Replay buffer:",
         len(agent.memory)
     )
+
+    # --------------------------------------------------
+    # Create first fake experience
+    # --------------------------------------------------
 
     state = np.random.rand(26)
 
@@ -221,17 +375,18 @@ if __name__ == "__main__":
         done=False
     )
 
-    print(
-        "Replay buffer after experience:",
-        len(agent.memory)
-    )
+    # --------------------------------------------------
+    # Fill replay buffer
+    # --------------------------------------------------
 
     for _ in range(63):
 
         agent.remember(
             state=np.random.rand(26),
             action=random.randrange(4),
-            reward=random.choice([-1, 0, 1, 10]),
+            reward=random.choice(
+                [-1, 0, 1, 5, 10]
+            ),
             next_state=np.random.rand(26),
             done=False
         )
@@ -241,6 +396,10 @@ if __name__ == "__main__":
         len(agent.memory)
     )
 
+    # --------------------------------------------------
+    # Train
+    # --------------------------------------------------
+
     loss = agent.train_step()
 
     print(
@@ -249,6 +408,28 @@ if __name__ == "__main__":
     )
 
     print(
+        "Training steps:",
+        agent.training_steps
+    )
+
+    print(
         "Epsilon after training:",
         agent.epsilon
     )
+
+    # --------------------------------------------------
+    # Test action selection
+    # --------------------------------------------------
+
+    test_state = np.random.rand(26)
+
+    action = agent.choose_action(
+        test_state
+    )
+
+    print(
+        "Test action:",
+        action
+    )
+
+    print("=" * 50)

@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  ai-backend:
+    build: .
+    container_name: pacman-ai-backend
+    ports:
+      - "8765:8765"
+    volumes:
+      # Persist checkpoints on the host so training progress isn't lost
+      - ./checkpoints:/app/checkpoints
+    restart: unless-stopped
+
+  web-frontend:
+    image: python:3.10-alpine
+    container_name: pacman-web-frontend
+    working_dir: /usr/src/app
+    volumes:
+      # Mount the game frontend files
+      - ./game/pacman:/usr/src/app
+    ports:
+      - "8080:8000"
+    command: python -m http.server 8000
+    restart: unless-stopped

@@ -12,7 +12,7 @@ import agent.dqn as dqn
 # SERVER CONFIG
 # ============================================================
 
-HOST = "localhost"
+HOST = "0.0.0.0"
 PORT = 8765
 
 CHECKPOINT_DIR = "checkpoints"

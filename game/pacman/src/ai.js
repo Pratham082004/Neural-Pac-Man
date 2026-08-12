@@ -131,7 +131,7 @@ var neuralAI = {
     connect: function () {
 
         this.socket = new WebSocket(
-            "ws://localhost:8765"
+            "ws://" + window.location.hostname + ":8765"
         );
 
         if (!console._originalLog) {
@@ -583,48 +583,74 @@ var neuralAI = {
 
             if (deadTransition) {
                 reward = -10;
-                console.log(
-                    "DEATH TRANSITION",
-                    {
-                        score: currentScore,
-                        reward: reward,
-                        done: done,
-                        terminalTransition: terminalTransition
-                    }
-                );
+                console.log("[AI EVENT] DEATH\nreward=" + reward + "\ndone=" + done);
 
             } else if (done) {
                 reward = -10;
-                console.log(
-                    "GAME OVER",
-                    {
-                        score: currentScore,
-                        reward: reward
-                    }
-                );
+                console.log("[AI EVENT] GAME OVER\nreward=" + reward + "\ndone=" + done);
 
             } else if (scoreReward === 50) {
-                reward = 10;
-                console.log(
-                    "ENERGIZER",
-                    {
-                        scoreChange: scoreReward,
-                        reward: reward
-                    }
-                );
+                reward = 5;
+                console.log("[AI EVENT] ENERGIZER\nscoreChange=" + scoreReward + "\nreward=" + reward);
 
             } else if (scoreReward === 10) {
                 reward = 1;
-                console.log(
-                    "PELLET",
-                    {
-                        scoreChange: scoreReward,
-                        reward: reward
-                    }
-                );
+                console.log("[AI EVENT] PELLET\nscoreChange=" + scoreReward + "\nreward=" + reward);
+
+            } else if (scoreReward >= 200) {
+                reward = 10;
+                console.log("[AI EVENT] GHOST_EATEN\nscoreChange=" + scoreReward + "\nreward=" + reward);
 
             } else {
-                reward = 0;
+                var oldX = oldState[0];
+                var oldY = oldState[1];
+                var nextX = nextState[0];
+                var nextY = nextState[1];
+                if (oldX === nextX && oldY === nextY) {
+                    reward = -0.05;
+                    console.log("[AI EVENT] BLOCKED\naction=" + action + "\nposition=(" + oldX + "," + oldY + ")\nreward=" + reward);
+                } else {
+                    reward = 0;
+                    console.log("[AI EVENT] MOVE\nreward=" + reward);
+                }
+            }
+
+            // Ghost danger shaping
+            if (!deadTransition && !done) {
+                var shapingReward = 0;
+                for (var i = 0; i < 4; i++) {
+                    var oldDist = oldState[12 + i * 4] * 30;
+                    var nextDist = nextState[12 + i * 4] * 30;
+                    var isScared = nextState[13 + i * 4] === 1;
+
+                    if (isScared) {
+                        if (nextDist < oldDist) {
+                            shapingReward += 0.2; // Moving toward scared ghost
+                        } else if (nextDist > oldDist) {
+                            shapingReward -= 0.1; // Penalize moving away from scared ghost
+                        }
+                    } else {
+                        // Consider danger if ghost is within 5 tiles
+                        if (oldDist <= 5 || nextDist <= 5) {
+                            if (nextDist < oldDist) {
+                                shapingReward -= 0.3; // Moving into danger
+                            } else if (nextDist > oldDist) {
+                                shapingReward += 0.3; // Moving away from danger
+                            }
+                        }
+                    }
+                }
+                
+                if (shapingReward !== 0) {
+                    // Cap shaping reward to prevent it overtaking main game rewards
+                    if (shapingReward > 0.8) shapingReward = 0.8;
+                    if (shapingReward < -0.8) shapingReward = -0.8;
+                    reward += shapingReward;
+                    
+                    // Round to avoid float precision issues
+                    reward = Math.round(reward * 100) / 100;
+                    console.log("[AI EVENT] SHAPING\nreward=" + reward);
+                }
             }
 
             neuralAI.previousScore =
