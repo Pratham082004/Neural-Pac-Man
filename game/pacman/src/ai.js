@@ -62,62 +62,88 @@ var neuralAI = {
     },
 
     getStateVector: function () {
-        if (
-            !pacman ||
-            typeof map === "undefined" ||
-            !map ||
-            typeof getOpenTiles !== "function"
-        ) {
-            return null;
-        }
+        if (!pacman || typeof map === "undefined" || !map || typeof getOpenTiles !== "function") return null;
 
         var state = [];
+        state.push(pacman.tile.x / map.numCols);
+        state.push(pacman.tile.y / map.numRows);
+        state.push(pacman.dirEnum === DIR_UP ? 1 : 0);
+        state.push(pacman.dirEnum === DIR_DOWN ? 1 : 0);
+        state.push(pacman.dirEnum === DIR_LEFT ? 1 : 0);
+        state.push(pacman.dirEnum === DIR_RIGHT ? 1 : 0);
 
-        state.push(pacman.tile.x);
-        state.push(pacman.tile.y);
-
-        state.push(
-            pacman.dirEnum === DIR_UP ? 1 : 0
-        );
-
-        state.push(
-            pacman.dirEnum === DIR_DOWN ? 1 : 0
-        );
-
-        state.push(
-            pacman.dirEnum === DIR_LEFT ? 1 : 0
-        );
-
-        state.push(
-            pacman.dirEnum === DIR_RIGHT ? 1 : 0
-        );
-
-        var openTiles = getOpenTiles(
-            pacman.tile,
-            pacman.dirEnum
-        );
-
+        var openTiles = getOpenTiles(pacman.tile, pacman.dirEnum);
         state.push(openTiles[DIR_UP] ? 1 : 0);
         state.push(openTiles[DIR_DOWN] ? 1 : 0);
         state.push(openTiles[DIR_LEFT] ? 1 : 0);
         state.push(openTiles[DIR_RIGHT] ? 1 : 0);
 
-        ghosts.forEach(function (ghost) {
+        var immediateDanger = 0;
+        var nearestDangerousDist = Infinity, nearestDangerousDx = 0, nearestDangerousDy = 0;
+        var nearestScaredDist = Infinity, nearestScaredDx = 0, nearestScaredDy = 0;
 
+        ghosts.forEach(function (ghost) {
             var dx = ghost.tile.x - pacman.tile.x;
             var dy = ghost.tile.y - pacman.tile.y;
+            var distance = Math.sqrt(dx * dx + dy * dy);
+            var normDist = Math.min(distance / 30, 1);
+            var isDangerous = (ghost.mode === 0 && !ghost.scared);
 
-            var distance = Math.sqrt(
-                dx * dx + dy * dy
-            );
+            if (isDangerous && distance <= 3) immediateDanger = 1;
+            if (isDangerous && distance < nearestDangerousDist) {
+                nearestDangerousDist = distance; nearestDangerousDx = dx; nearestDangerousDy = dy;
+            }
+            if (ghost.mode === 0 && ghost.scared && distance < nearestScaredDist) {
+                nearestScaredDist = distance; nearestScaredDx = dx; nearestScaredDy = dy;
+            }
 
-            distance = Math.min(distance / 30, 1);
-
-            state.push(dx / 30);
-            state.push(dy / 30);
-            state.push(distance);
-            state.push(ghost.scared ? 1 : 0);
+            state.push(dx / 30); state.push(dy / 30); state.push(normDist);
+            state.push(ghost.scared ? 1 : 0); state.push(isDangerous ? 1 : 0);
         });
+
+        var nearestPelletDist = Infinity, nearestPelletDx = 0, nearestPelletDy = 0;
+        for (var i = 0; i < map.numTiles; i++) {
+            var c = map.currentTiles[i];
+            if (c === '.' || c === 'o') {
+                var x = i % map.numCols, y = Math.floor(i / map.numCols);
+                var dx = x - pacman.tile.x, dy = y - pacman.tile.y;
+                var distSq = dx * dx + dy * dy;
+                if (distSq < nearestPelletDist) {
+                    nearestPelletDist = distSq; nearestPelletDx = dx; nearestPelletDy = dy;
+                }
+            }
+        }
+        if (nearestPelletDist === Infinity) { state.push(0); state.push(0); state.push(1); }
+        else {
+            var dist = Math.sqrt(nearestPelletDist);
+            state.push(nearestPelletDx / 30); state.push(nearestPelletDy / 30); state.push(Math.min(dist / 30, 1));
+        }
+
+        var nearestEnDist = Infinity, nearestEnDx = 0, nearestEnDy = 0;
+        if (map.energizers) {
+            map.energizers.forEach(function (en) {
+                if (map.currentTiles[en.y * map.numCols + en.x] === 'o') {
+                    var dx = en.x - pacman.tile.x, dy = en.y - pacman.tile.y;
+                    var distSq = dx * dx + dy * dy;
+                    if (distSq < nearestEnDist) { nearestEnDist = distSq; nearestEnDx = dx; nearestEnDy = dy; }
+                }
+            });
+        }
+        if (nearestEnDist === Infinity) { state.push(0); state.push(0); state.push(1); }
+        else {
+            var dist = Math.sqrt(nearestEnDist);
+            state.push(nearestEnDx / 30); state.push(nearestEnDy / 30); state.push(Math.min(dist / 30, 1));
+        }
+
+        if (nearestDangerousDist === Infinity) { state.push(0); state.push(0); state.push(1); }
+        else { state.push(nearestDangerousDx / 30); state.push(nearestDangerousDy / 30); state.push(Math.min(nearestDangerousDist / 30, 1)); }
+
+        if (nearestScaredDist === Infinity) { state.push(0); state.push(0); state.push(1); }
+        else { state.push(nearestScaredDx / 30); state.push(nearestScaredDy / 30); state.push(Math.min(nearestScaredDist / 30, 1)); }
+
+        state.push(map.dotsEaten / Math.max(1, map.numDots));
+        state.push(typeof energizer !== "undefined" && energizer.isActive() ? 1 : 0);
+        state.push(immediateDanger);
 
         return state;
     },
@@ -492,115 +518,58 @@ var neuralAI = {
         );
     },
 
-    sendTransition: function (
-        oldState,
-        oldScore,
-        action
-    ) {
-
-        if (
-            !this.socket ||
-            this.socket.readyState !== WebSocket.OPEN
-        ) {
-            return;
-        }
+    sendTransition: function (oldState, oldScore, action) {
+        if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
 
         this.lastState = oldState;
         this.lastAction = action;
 
         var self = this;
-        var currentScore =
-            getScore();
+        var currentScore = typeof getScore !== "undefined" ? getScore() : 0;
+        var scoreReward = currentScore - oldScore;
 
-        var scoreReward =
-            currentScore - oldScore;
+        var gameState = (typeof state !== "undefined" ? state : typeof window !== "undefined" ? window.state : undefined);
+        var gameDeadState = (typeof deadState !== "undefined" ? deadState : typeof window !== "undefined" ? window.deadState : undefined);
+        var gameOverState = (typeof overState !== "undefined" ? overState : typeof window !== "undefined" ? window.overState : undefined);
+        var gameFinishState = (typeof finishState !== "undefined" ? finishState : typeof window !== "undefined" ? window.finishState : undefined);
 
-        var gameState =
-            (typeof state !== "undefined"
-                ? state
-                : typeof window !== "undefined"
-                    ? window.state
-                    : undefined);
-
-        var gameDeadState =
-            (typeof deadState !== "undefined"
-                ? deadState
-                : typeof window !== "undefined"
-                    ? window.deadState
-                    : undefined);
-
-        var gameOverState =
-            (typeof overState !== "undefined"
-                ? overState
-                : typeof window !== "undefined"
-                    ? window.overState
-                    : undefined);
-
-        var terminalTransition =
-            typeof gameState !== "undefined" &&
-            typeof gameDeadState !== "undefined" &&
-            gameState === gameDeadState &&
-            typeof extraLives !== "undefined" &&
-            extraLives === 0;
-
+        var terminalTransition = typeof gameState !== "undefined" && typeof gameDeadState !== "undefined" && gameState === gameDeadState && typeof extraLives !== "undefined" && extraLives === 0;
         var deadTransition = false;
 
         var sendTransitionNow = function () {
-            var gameStateNow =
-                (typeof state !== "undefined"
-                    ? state
-                    : typeof window !== "undefined"
-                        ? window.state
-                        : undefined);
+            var gameStateNow = (typeof state !== "undefined" ? state : typeof window !== "undefined" ? window.state : undefined);
 
-            if (
-                typeof gameStateNow !== "undefined" &&
-                typeof gameDeadState !== "undefined" &&
-                gameStateNow === gameDeadState
-            ) {
-                console.warn(
-                    "Waiting for deadState to finish before sending transition"
-                );
+            if (typeof gameStateNow !== "undefined" && typeof gameDeadState !== "undefined" && gameStateNow === gameDeadState) {
+                console.warn("Waiting for deadState to finish before sending transition");
                 setTimeout(sendTransitionNow, 50);
                 return;
             }
 
-            var nextState =
-                self.getStateVector();
-
-            if (!nextState) {
-                nextState = oldState;
-            }
-
-            var done =
-                terminalTransition || (
-                    typeof gameStateNow !== "undefined" &&
-                    typeof gameOverState !== "undefined" &&
-                    gameStateNow === gameOverState
-                );
+            var nextState = self.getStateVector() || oldState;
+            var isFinishState = typeof gameStateNow !== "undefined" && typeof gameFinishState !== "undefined" && gameStateNow === gameFinishState;
+            
+            var done = terminalTransition || (typeof gameStateNow !== "undefined" && typeof gameOverState !== "undefined" && gameStateNow === gameOverState) || isFinishState;
 
             var reward = 0;
 
-            if (deadTransition) {
+            if (isFinishState) {
+                reward = 50;
+                console.log("[AI EVENT] LEVEL COMPLETE\nreward=" + reward + "\ndone=" + done);
+            } else if (deadTransition) {
                 reward = -10;
                 console.log("[AI EVENT] DEATH\nreward=" + reward + "\ndone=" + done);
-
             } else if (done) {
                 reward = -10;
                 console.log("[AI EVENT] GAME OVER\nreward=" + reward + "\ndone=" + done);
-
             } else if (scoreReward === 50) {
                 reward = 5;
                 console.log("[AI EVENT] ENERGIZER\nscoreChange=" + scoreReward + "\nreward=" + reward);
-
             } else if (scoreReward === 10) {
                 reward = 1;
                 console.log("[AI EVENT] PELLET\nscoreChange=" + scoreReward + "\nreward=" + reward);
-
             } else if (scoreReward >= 200) {
                 reward = 10;
                 console.log("[AI EVENT] GHOST_EATEN\nscoreChange=" + scoreReward + "\nreward=" + reward);
-
             } else {
                 var oldX = oldState[0];
                 var oldY = oldState[1];
@@ -615,81 +584,39 @@ var neuralAI = {
                 }
             }
 
-            // Ghost danger shaping
             if (!deadTransition && !done) {
                 var shapingReward = 0;
                 for (var i = 0; i < 4; i++) {
-                    var oldDist = oldState[12 + i * 4] * 30;
-                    var nextDist = nextState[12 + i * 4] * 30;
-                    var isScared = nextState[13 + i * 4] === 1;
+                    var oldDist = oldState[12 + i * 5] * 30;
+                    var nextDist = nextState[12 + i * 5] * 30;
+                    var isDangerous = nextState[14 + i * 5] === 1;
 
-                    if (isScared) {
-                        if (nextDist < oldDist) {
-                            shapingReward += 0.2; // Moving toward scared ghost
-                        } else if (nextDist > oldDist) {
-                            shapingReward -= 0.1; // Penalize moving away from scared ghost
-                        }
-                    } else {
-                        // Consider danger if ghost is within 5 tiles
+                    if (isDangerous) {
                         if (oldDist <= 5 || nextDist <= 5) {
-                            if (nextDist < oldDist) {
-                                shapingReward -= 0.3; // Moving into danger
-                            } else if (nextDist > oldDist) {
-                                shapingReward += 0.3; // Moving away from danger
-                            }
+                            if (nextDist < oldDist) shapingReward -= 0.3;
+                            else if (nextDist > oldDist) shapingReward += 0.3;
                         }
                     }
                 }
                 
                 if (shapingReward !== 0) {
-                    // Cap shaping reward to prevent it overtaking main game rewards
                     if (shapingReward > 0.8) shapingReward = 0.8;
                     if (shapingReward < -0.8) shapingReward = -0.8;
                     reward += shapingReward;
-                    
-                    // Round to avoid float precision issues
                     reward = Math.round(reward * 100) / 100;
                     console.log("[AI EVENT] SHAPING\nreward=" + reward);
                 }
             }
 
-            neuralAI.previousScore =
-                currentScore;
-
-            self.socket.send(
-                JSON.stringify({
-                    type: "transition",
-                    state: oldState,
-                    action: action,
-                    next_state: nextState,
-                    reward: reward,
-                    done: done
-                })
-            );
-
-            console.log(
-                "TRANSITION",
-                {
-                    action: action,
-                    oldScore: oldScore,
-                    currentScore: currentScore,
-                    scoreChange: scoreReward,
-                    reward: reward,
-                    done: done
-                }
-            );
+            neuralAI.previousScore = currentScore;
+            self.socket.send(JSON.stringify({ type: "transition", state: oldState, action: action, next_state: nextState, reward: reward, done: done }));
 
             if (!done) {
-                setTimeout(function () {
-                    self.sendState();
-                }, 50);
+                setTimeout(function () { self.sendState(); }, 50);
             }
         };
 
-        if (
-            typeof gameState !== "undefined" &&
-            gameState === gameDeadState
-        ) {
+        if (typeof gameState !== "undefined" && gameState === gameDeadState) {
             deadTransition = true;
             setTimeout(sendTransitionNow, 50);
             return;

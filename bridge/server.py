@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import sys
 
 import torch
 import websockets
@@ -18,8 +19,20 @@ PORT = 8765
 CHECKPOINT_DIR = "checkpoints"
 CHECKPOINT_FILE = os.path.join(
     CHECKPOINT_DIR,
-    "pacman_dqn.pth"
+    "pacman_dqn_v2.pth"
 )
+
+MODE = (
+    sys.argv[1].lower()
+    if len(sys.argv) > 1
+    else "train"
+)
+
+if MODE not in ("train", "eval"):
+    print("Usage:")
+    print("  python server.py train")
+    print("  python server.py eval")
+    sys.exit(1)
 
 
 # ============================================================
@@ -30,7 +43,19 @@ agent = dqn.DQNAgent()
 
 
 # ============================================================
-# EPISODE STATISTICS
+# EVALUATION STATE
+# ============================================================
+
+evaluation_episode = 0
+evaluation_steps = 0
+evaluation_reward = 0.0
+evaluation_finished = False
+
+EVALUATION_EPISODES = 10
+
+
+# ============================================================
+# TRAINING STATISTICS
 # ============================================================
 
 episode_number = 0
@@ -42,13 +67,7 @@ episode_positive_rewards = 0
 episode_negative_rewards = 0
 
 episode_max_reward = 0.0
-
 episode_losses = []
-
-
-# ============================================================
-# GLOBAL TRAINING STATISTICS
-# ============================================================
 
 best_episode_reward = float("-inf")
 best_episode_steps = 0
@@ -57,7 +76,7 @@ total_transitions = 0
 
 
 # ============================================================
-# CHECKPOINT FUNCTIONS
+# CHECKPOINT
 # ============================================================
 
 def save_checkpoint():
@@ -116,14 +135,10 @@ def load_checkpoint():
     if not os.path.exists(CHECKPOINT_FILE):
 
         print(
-            "[CHECKPOINT] No checkpoint found."
+            f"[CHECKPOINT] NOT FOUND: {CHECKPOINT_FILE}"
         )
 
-        print(
-            "[CHECKPOINT] Starting training from scratch."
-        )
-
-        return
+        return False
 
     try:
 
@@ -140,9 +155,12 @@ def load_checkpoint():
             checkpoint["target_model_state_dict"]
         )
 
-        agent.optimizer.load_state_dict(
-            checkpoint["optimizer_state_dict"]
-        )
+        # Only restore optimizer during training.
+        if MODE == "train":
+            if "optimizer_state_dict" in checkpoint:
+                agent.optimizer.load_state_dict(
+                    checkpoint["optimizer_state_dict"]
+                )
 
         agent.epsilon = checkpoint.get(
             "epsilon",
@@ -175,9 +193,9 @@ def load_checkpoint():
         )
 
         print()
-        print("=" * 55)
+        print("=" * 60)
         print("CHECKPOINT LOADED")
-        print("-" * 55)
+        print("-" * 60)
         print(
             f"Episodes:          {episode_number}"
         )
@@ -188,7 +206,7 @@ def load_checkpoint():
             f"Transitions:       {total_transitions}"
         )
         print(
-            f"Epsilon:           {agent.epsilon:.4f}"
+            f"Saved epsilon:     {agent.epsilon:.4f}"
         )
         print(
             f"Best reward:       {best_episode_reward:.2f}"
@@ -196,27 +214,27 @@ def load_checkpoint():
         print(
             f"Best steps:        {best_episode_steps}"
         )
-        print("=" * 55)
+        print("=" * 60)
         print()
+
+        return True
 
     except Exception as e:
 
         print(
-            "[CHECKPOINT] Failed to load checkpoint:"
+            "[CHECKPOINT] Failed to load:"
         )
 
         print(e)
 
-        print(
-            "[CHECKPOINT] Starting from current agent state."
-        )
+        return False
 
 
 # ============================================================
-# RESET EPISODE STATISTICS
+# TRAINING RESET
 # ============================================================
 
-def reset_episode_statistics():
+def reset_training_episode():
 
     global episode_steps
     global episode_reward
@@ -232,15 +250,14 @@ def reset_episode_statistics():
     episode_negative_rewards = 0
 
     episode_max_reward = 0.0
-
     episode_losses = []
 
 
 # ============================================================
-# PRINT EPISODE SUMMARY
+# FINISH TRAINING EPISODE
 # ============================================================
 
-def finish_episode():
+def finish_training_episode():
 
     global episode_number
     global best_episode_reward
@@ -254,41 +271,27 @@ def finish_episode():
         else 0.0
     )
 
-    # --------------------------------------------------------
-    # Best reward
-    # --------------------------------------------------------
-
     new_best_reward = False
+    new_best_steps = False
 
     if episode_reward > best_episode_reward:
 
         best_episode_reward = episode_reward
         new_best_reward = True
 
-    # --------------------------------------------------------
-    # Best survival
-    # --------------------------------------------------------
-
-    new_best_steps = False
-
     if episode_steps > best_episode_steps:
 
         best_episode_steps = episode_steps
         new_best_steps = True
 
-    # --------------------------------------------------------
-    # Episode output
-    # --------------------------------------------------------
-
     print()
-
-    print("=" * 55)
+    print("=" * 60)
 
     print(
         f"Episode {episode_number} finished"
     )
 
-    print("-" * 55)
+    print("-" * 60)
 
     print(
         f"Steps:              {episode_steps}"
@@ -335,32 +338,148 @@ def finish_episode():
     )
 
     if new_best_reward:
-
         print(
             "🔥 NEW BEST REWARD!"
         )
 
     if new_best_steps:
-
         print(
             "🏆 NEW BEST SURVIVAL!"
         )
 
-    print("=" * 55)
-
+    print("=" * 60)
     print()
-
-    # --------------------------------------------------------
-    # Save checkpoint
-    # --------------------------------------------------------
 
     save_checkpoint()
 
-    # --------------------------------------------------------
-    # Reset episode statistics
-    # --------------------------------------------------------
+    reset_training_episode()
 
-    reset_episode_statistics()
+
+# ============================================================
+# EVALUATION RESET
+# ============================================================
+
+def reset_evaluation_episode():
+
+    global evaluation_steps
+    global evaluation_reward
+    global evaluation_finished
+
+    evaluation_steps = 0
+    evaluation_reward = 0.0
+    evaluation_finished = False
+
+
+# ============================================================
+# FINISH EVALUATION EPISODE
+# ============================================================
+
+def finish_evaluation_episode():
+
+    global evaluation_episode
+    global evaluation_finished
+
+    evaluation_episode += 1
+
+    print()
+    print("=" * 60)
+
+    print(
+        f"EVALUATION EPISODE {evaluation_episode}/{EVALUATION_EPISODES}"
+    )
+
+    print("-" * 60)
+
+    print(
+        f"Steps:              {evaluation_steps}"
+    )
+
+    print(
+        f"Total reward:       {evaluation_reward:.2f}"
+    )
+
+    print(
+        f"Epsilon:            {agent.epsilon:.4f}"
+    )
+
+    print("=" * 60)
+    print()
+
+    evaluation_finished = True
+
+
+# ============================================================
+# FINAL EVALUATION SUMMARY
+# ============================================================
+
+evaluation_results = []
+
+
+def print_evaluation_summary():
+
+    if not evaluation_results:
+        return
+
+    rewards = [
+        result["reward"]
+        for result in evaluation_results
+    ]
+
+    steps = [
+        result["steps"]
+        for result in evaluation_results
+    ]
+
+    average_reward = sum(rewards) / len(rewards)
+    average_steps = sum(steps) / len(steps)
+
+    best_reward = max(rewards)
+    best_steps = max(steps)
+
+    worst_reward = min(rewards)
+
+    print()
+    print()
+    print("#" * 60)
+    print("FINAL EVALUATION RESULTS")
+    print("#" * 60)
+
+    print(
+        f"Games evaluated:    {len(evaluation_results)}"
+    )
+
+    print(
+        f"Average reward:     {average_reward:.2f}"
+    )
+
+    print(
+        f"Best reward:        {best_reward:.2f}"
+    )
+
+    print(
+        f"Worst reward:       {worst_reward:.2f}"
+    )
+
+    print(
+        f"Average steps:      {average_steps:.2f}"
+    )
+
+    print(
+        f"Best survival:      {best_steps}"
+    )
+
+    print("-" * 60)
+
+    for result in evaluation_results:
+
+        print(
+            f"Game {result['episode']:02d} | "
+            f"Steps: {result['steps']:4d} | "
+            f"Reward: {result['reward']:8.2f}"
+        )
+
+    print("#" * 60)
+    print()
 
 
 # ============================================================
@@ -377,8 +496,28 @@ async def handle_connection(websocket):
     global episode_losses
     global total_transitions
 
+    global evaluation_steps
+    global evaluation_reward
+    global evaluation_finished
+
     print()
     print("Pac-Man connected")
+
+    if MODE == "train":
+
+        print(
+            "[MODE] TRAINING"
+        )
+
+    else:
+
+        print(
+            "[MODE] EVALUATION"
+        )
+
+        print(
+            "[EVAL] Epsilon forced to 0.0"
+        )
 
     try:
 
@@ -398,13 +537,19 @@ async def handle_connection(websocket):
 
                 state = data["state"]
 
-                # ------------------------------------------------
-                # Select action using DQN
-                # ------------------------------------------------
+                if MODE == "eval":
 
-                action = agent.choose_action(
-                    state
-                )
+                    # Completely deterministic evaluation.
+                    action = agent.choose_action(
+                        state
+                    )
+
+                else:
+
+                    # Normal DQN training exploration.
+                    action = agent.choose_action(
+                        state
+                    )
 
                 await websocket.send(
                     json.dumps({
@@ -414,23 +559,43 @@ async def handle_connection(websocket):
                 )
 
             # ==================================================
-            # LOG
+            # BROWSER LOG
             # ==================================================
 
             elif message_type == "log":
 
-                level = data.get("level", "info")
-                message_items = data.get("message", [])
+                level = data.get(
+                    "level",
+                    "info"
+                )
+
+                message_items = data.get(
+                    "message",
+                    []
+                )
+
                 message_text = " ".join(
-                    str(item) for item in message_items
+                    str(item)
+                    for item in message_items
                 )
 
                 if level == "warn":
-                    print(f"[BROWSER WARN] {message_text}")
+
+                    print(
+                        f"[BROWSER WARN] {message_text}"
+                    )
+
                 elif level == "error":
-                    print(f"[BROWSER ERROR] {message_text}")
+
+                    print(
+                        f"[BROWSER ERROR] {message_text}"
+                    )
+
                 else:
-                    print(f"[BROWSER] {message_text}")
+
+                    print(
+                        f"[BROWSER] {message_text}"
+                    )
 
             # ==================================================
             # TRANSITION
@@ -452,9 +617,69 @@ async def handle_connection(websocket):
                     data["done"]
                 )
 
-                # ------------------------------------------------
-                # Episode statistics
-                # ------------------------------------------------
+                # ==================================================
+                # EVALUATION MODE
+                # ==================================================
+
+                if MODE == "eval":
+
+                    evaluation_steps += 1
+
+                    evaluation_reward += reward
+
+                    print(
+                        f"[EVAL] "
+                        f"step={evaluation_steps} "
+                        f"reward={reward:.2f} "
+                        f"done={done}"
+                    )
+
+                    if done:
+
+                        evaluation_results.append({
+                            "episode":
+                                evaluation_episode + 1,
+
+                            "steps":
+                                evaluation_steps,
+
+                            "reward":
+                                evaluation_reward
+                        })
+
+                        finish_evaluation_episode()
+
+                        if evaluation_episode >= EVALUATION_EPISODES:
+
+                            print_evaluation_summary()
+
+                            print(
+                                "[EVAL] Evaluation complete."
+                            )
+
+                            print(
+                                "[EVAL] Close the server with CTRL+C."
+                            )
+
+                            return
+
+                        reset_evaluation_episode()
+
+                        print(
+                            "[EVAL] Starting next evaluation episode..."
+                        )
+
+                        await websocket.send(
+                            json.dumps({
+                                "type": "reset"
+                            })
+                        )
+
+                    continue
+
+                # ==================================================
+                # TRAINING MODE
+                # ==================================================
 
                 episode_steps += 1
 
@@ -475,9 +700,9 @@ async def handle_connection(websocket):
                     reward
                 )
 
-                # ------------------------------------------------
+                # --------------------------------------------------
                 # Store experience
-                # ------------------------------------------------
+                # --------------------------------------------------
 
                 agent.remember(
                     state,
@@ -487,9 +712,9 @@ async def handle_connection(websocket):
                     done
                 )
 
-                # ------------------------------------------------
+                # --------------------------------------------------
                 # Train
-                # ------------------------------------------------
+                # --------------------------------------------------
 
                 loss = agent.train_step()
 
@@ -504,23 +729,27 @@ async def handle_connection(websocket):
                     )
 
                 print(
-                    f"[SERVER] Transition received: done={done} reward={reward:.2f} total_transitions={total_transitions}"
+                    f"[SERVER] "
+                    f"Transition received: "
+                    f"done={done} "
+                    f"reward={reward:.2f} "
+                    f"total_transitions={total_transitions}"
                 )
 
-                # ------------------------------------------------
+                # --------------------------------------------------
                 # Episode finished
-                # ------------------------------------------------
+                # --------------------------------------------------
 
                 if done:
 
                     print(
-                        "[SERVER] Terminal transition received, finishing episode"
+                        "[SERVER] Terminal transition received."
                     )
 
-                    finish_episode()
+                    finish_training_episode()
 
                     print(
-                        "[SERVER] Sending automatic reset to browser"
+                        "[SERVER] Sending automatic reset to browser."
                     )
 
                     await websocket.send(
@@ -539,7 +768,13 @@ async def handle_connection(websocket):
                     "[SERVER] Reset requested"
                 )
 
-                reset_episode_statistics()
+                if MODE == "train":
+
+                    reset_training_episode()
+
+                else:
+
+                    reset_evaluation_episode()
 
                 await websocket.send(
                     json.dumps({
@@ -568,19 +803,81 @@ async def handle_connection(websocket):
 
 async def main():
 
-    print(
-        f"Starting server on {HOST}:{PORT}"
-    )
+    print()
+    print("=" * 60)
 
-    # --------------------------------------------------------
-    # Load previous training
-    # --------------------------------------------------------
+    if MODE == "train":
 
-    load_checkpoint()
+        print(
+            "NEURAL PAC-MAN — TRAINING MODE"
+        )
 
-    # --------------------------------------------------------
-    # Start WebSocket server
-    # --------------------------------------------------------
+    else:
+
+        print(
+            "NEURAL PAC-MAN — EVALUATION MODE"
+        )
+
+    print("=" * 60)
+
+    # ----------------------------------------------------------
+    # Load checkpoint
+    # ----------------------------------------------------------
+
+    loaded = load_checkpoint()
+
+    if not loaded:
+
+        if MODE == "eval":
+            print(
+                "[SERVER] Cannot evaluate without checkpoint."
+            )
+            return
+            
+        print(
+            "[SERVER] Checkpoint not found. Starting training from scratch."
+        )
+
+    # ----------------------------------------------------------
+    # Evaluation configuration
+    # ----------------------------------------------------------
+
+    if MODE == "eval":
+
+        agent.epsilon = 0.0
+
+        agent.model.eval()
+
+        agent.target_model.eval()
+
+        print()
+        print(
+            "🔥 EVALUATION CONFIGURATION"
+        )
+        print(
+            "Epsilon:            0.0000"
+        )
+        print(
+            "Training:           DISABLED"
+        )
+        print(
+            "Replay memory:      DISABLED"
+        )
+        print(
+            "Optimizer:          DISABLED"
+        )
+        print(
+            f"Episodes:           {EVALUATION_EPISODES}"
+        )
+        print()
+
+    else:
+
+        agent.model.train()
+
+    # ----------------------------------------------------------
+    # Start WebSocket
+    # ----------------------------------------------------------
 
     async with websockets.serve(
         handle_connection,
@@ -592,6 +889,8 @@ async def main():
             f"WebSocket server running at "
             f"ws://{HOST}:{PORT}"
         )
+
+        print()
 
         await asyncio.Future()
 

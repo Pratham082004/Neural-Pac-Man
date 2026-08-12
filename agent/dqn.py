@@ -1,5 +1,6 @@
 import random
 
+# pyrefly: ignore [missing-import]
 import numpy as np
 import torch
 import torch.nn as nn
@@ -13,7 +14,7 @@ class DQNAgent:
 
     def __init__(
         self,
-        state_size=26,
+        state_size=45,
         action_size=4,
         gamma=0.99,
         learning_rate=0.001,
@@ -382,12 +383,12 @@ if __name__ == "__main__":
     for _ in range(63):
 
         agent.remember(
-            state=np.random.rand(26),
+            state=np.random.rand(45),
             action=random.randrange(4),
             reward=random.choice(
                 [-1, 0, 1, 5, 10]
             ),
-            next_state=np.random.rand(26),
+            next_state=np.random.rand(45),
             done=False
         )
 
@@ -421,7 +422,7 @@ if __name__ == "__main__":
     # Test action selection
     # --------------------------------------------------
 
-    test_state = np.random.rand(26)
+    test_state = np.random.rand(45)
 
     action = agent.choose_action(
         test_state

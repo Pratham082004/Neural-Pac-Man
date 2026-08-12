@@ -3,18 +3,21 @@ import torch.nn as nn
 
 class DQN(nn.Module):
 
-    def __init__(self, state_size=26, action_size=4):
+    def __init__(self, state_size=45, action_size=4):
         super().__init__()
 
         self.network = nn.Sequential(
 
-            nn.Linear(state_size, 64),
+            nn.Linear(state_size, 128),
             nn.ReLU(),
 
-            nn.Linear(64, 64),
+            nn.Linear(128, 128),
             nn.ReLU(),
 
-            nn.Linear(64, action_size)
+            nn.Linear(128, 128),
+            nn.ReLU(),
+
+            nn.Linear(128, action_size)
         )
 
     def forward(self, state):
@@ -26,8 +29,8 @@ if __name__ == "__main__":
 
     print(model)
 
-    # Fake Pac-Man state
-    state = torch.randn(1, 26)
+    # Fake Pac-Man state (V2)
+    state = torch.randn(1, 45)
 
     q_values = model(state)
 
