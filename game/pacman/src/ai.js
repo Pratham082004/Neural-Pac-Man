@@ -1,41 +1,39 @@
 //////////////////////////////////////////////////////////////////////////////////////
 // Neural Pac-Man AI Interface
-// basically orchestrates the pacman object to move in a certain direction
 
 var neuralAI = {
 
-    setDirection: function(dirEnum) {
+    setDirection: function (dirEnum) {
         if (!pacman)
             return;
 
         pacman.setInputDir(dirEnum);
     },
 
-    stop: function() {
+    stop: function () {
         if (!pacman)
             return;
 
         pacman.clearInputDir();
     },
 
-    up: function() {
+    up: function () {
         this.setDirection(DIR_UP);
     },
 
-    left: function() {
+    left: function () {
         this.setDirection(DIR_LEFT);
     },
 
-    down: function() {
+    down: function () {
         this.setDirection(DIR_DOWN);
     },
 
-    right: function() {
+    right: function () {
         this.setDirection(DIR_RIGHT);
     },
-    // gets a JSON representation of the current game state for use in neural networks
-    getState: function() {
 
+    getState: function () {
         if (!pacman)
             return null;
 
@@ -50,7 +48,7 @@ var neuralAI = {
                 stopped: pacman.stopped
             },
 
-            ghosts: ghosts.map(function(ghost) {
+            ghosts: ghosts.map(function (ghost) {
                 return {
                     name: ghost.name,
                     tileX: ghost.tile.x,
@@ -62,90 +60,191 @@ var neuralAI = {
             })
         };
     },
-    // gets a vector representation of the current game state for use in neural networks
-    getStateVector: function() {
 
-    if (!pacman)
-        return null;
+    getStateVector: function () {
+        if (
+            !pacman ||
+            typeof map === "undefined" ||
+            !map ||
+            typeof getOpenTiles !== "function"
+        ) {
+            return null;
+        }
 
-    var state = [];
+        var state = [];
 
-    // Pac-Man position
+        state.push(pacman.tile.x);
+        state.push(pacman.tile.y);
 
-    state.push(pacman.tile.x);
-    state.push(pacman.tile.y);
-
-    // current direction
-    state.push(
-        pacman.dirEnum === DIR_UP ? 1 : 0
-    );
-
-    state.push(
-        pacman.dirEnum === DIR_DOWN ? 1 : 0
-    );
-
-    state.push(
-        pacman.dirEnum === DIR_LEFT ? 1 : 0
-    );
-
-    state.push(
-        pacman.dirEnum === DIR_RIGHT ? 1 : 0
-    );
-
-    // movement directions
-
-    var openTiles = getOpenTiles(
-        pacman.tile,
-        pacman.dirEnum
-    );
-
-    state.push(openTiles[DIR_UP] ? 1 : 0);
-    state.push(openTiles[DIR_DOWN] ? 1 : 0);
-    state.push(openTiles[DIR_LEFT] ? 1 : 0);
-    state.push(openTiles[DIR_RIGHT] ? 1 : 0);
-
-    // ghost information
-
-    ghosts.forEach(function(ghost) {
-
-        var dx = ghost.tile.x - pacman.tile.x;
-        var dy = ghost.tile.y - pacman.tile.y;
-
-        var distance = Math.sqrt(
-            dx * dx + dy * dy
+        state.push(
+            pacman.dirEnum === DIR_UP ? 1 : 0
         );
 
-        // approximate distances
-        distance = Math.min(distance / 30, 1);
+        state.push(
+            pacman.dirEnum === DIR_DOWN ? 1 : 0
+        );
 
-        state.push(dx / 30);
-        state.push(dy / 30);
-        state.push(distance);
+        state.push(
+            pacman.dirEnum === DIR_LEFT ? 1 : 0
+        );
 
-        state.push(ghost.scared ? 1 : 0);
-    });
+        state.push(
+            pacman.dirEnum === DIR_RIGHT ? 1 : 0
+        );
 
-    return state;
+        var openTiles = getOpenTiles(
+            pacman.tile,
+            pacman.dirEnum
+        );
+
+        state.push(openTiles[DIR_UP] ? 1 : 0);
+        state.push(openTiles[DIR_DOWN] ? 1 : 0);
+        state.push(openTiles[DIR_LEFT] ? 1 : 0);
+        state.push(openTiles[DIR_RIGHT] ? 1 : 0);
+
+        ghosts.forEach(function (ghost) {
+
+            var dx = ghost.tile.x - pacman.tile.x;
+            var dy = ghost.tile.y - pacman.tile.y;
+
+            var distance = Math.sqrt(
+                dx * dx + dy * dy
+            );
+
+            distance = Math.min(distance / 30, 1);
+
+            state.push(dx / 30);
+            state.push(dy / 30);
+            state.push(distance);
+            state.push(ghost.scared ? 1 : 0);
+        });
+
+        return state;
     },
 
-    //websockets connection
     socket: null,
 
-    connect: function() {
+    previousScore: 0,
 
-        this.socket = new WebSocket("ws://localhost:8765");
+    waitingForReset: false,
 
-        this.socket.onopen = function() {
-            console.log("Connected to Python AI");
+    connect: function () {
+
+        this.socket = new WebSocket(
+            "ws://localhost:8765"
+        );
+
+        if (!console._originalLog) {
+            console._originalLog = console.log.bind(console);
+            console._originalInfo = console.info.bind(console);
+            console._originalDebug = console.debug.bind(console);
+            console._originalWarn = console.warn.bind(console);
+            console._originalError = console.error.bind(console);
+        }
+
+        var originalConsoleLog = console._originalLog;
+        var originalConsoleInfo = console._originalInfo;
+        var originalConsoleDebug = console._originalDebug;
+        var originalConsoleWarn = console._originalWarn;
+        var originalConsoleError = console._originalError;
+
+        var sendBrowserLog = function (level, args) {
+            if (
+                neuralAI.socket &&
+                neuralAI.socket.readyState === WebSocket.OPEN
+            ) {
+                try {
+                    neuralAI.socket.send(
+                        JSON.stringify({
+                            type: "log",
+                            level: level,
+                            message: args.map(function (value) {
+                                try {
+                                    if (typeof value === "string")
+                                        return value;
+                                    return JSON.stringify(value);
+                                } catch (e) {
+                                    return String(value);
+                                }
+                            })
+                        })
+                    );
+                } catch (e) {
+                    originalConsoleError(
+                        "Failed to send log to Python:",
+                        e
+                    );
+                }
+            }
         };
 
-        this.socket.onmessage = function(event) {
+        console.log = function () {
+            originalConsoleLog.apply(console, arguments);
+            sendBrowserLog("info", Array.prototype.slice.call(arguments));
+        };
+
+        console.info = function () {
+            originalConsoleInfo.apply(console, arguments);
+            sendBrowserLog("info", Array.prototype.slice.call(arguments));
+        };
+
+        console.debug = function () {
+            originalConsoleDebug.apply(console, arguments);
+            sendBrowserLog("debug", Array.prototype.slice.call(arguments));
+        };
+
+        console.warn = function () {
+            originalConsoleWarn.apply(console, arguments);
+            sendBrowserLog("warn", Array.prototype.slice.call(arguments));
+        };
+
+        console.error = function () {
+            originalConsoleError.apply(console, arguments);
+            sendBrowserLog("error", Array.prototype.slice.call(arguments));
+        };
+
+        this.socket.onopen = function () {
+
+            console.log("Connected to Python AI");
+
+            neuralAI.previousScore = getScore();
+
+            console.log(
+                "Connection score:",
+                neuralAI.previousScore
+            );
+        };
+
+        this.socket.onmessage = function (event) {
 
             var message = JSON.parse(event.data);
 
             if (message.type === "action") {
 
+                if (neuralAI.waitingForReset) {
+                    console.log(
+                        "Ignoring action while reset is pending"
+                    );
+                    return;
+                }
+
                 var action = message.action;
+
+                var oldState =
+                    neuralAI.getStateVector();
+
+                var oldScore =
+                    getScore();
+
+                console.log(
+                    "BEFORE ACTION",
+                    {
+                        score: oldScore,
+                        action: action,
+                        tileX: pacman.tile.x,
+                        tileY: pacman.tile.y
+                    }
+                );
 
                 if (action === 0)
                     neuralAI.up();
@@ -158,23 +257,232 @@ var neuralAI = {
 
                 else if (action === 3)
                     neuralAI.right();
+
+                else {
+                    console.error(
+                        "Invalid action:",
+                        action
+                    );
+                    return;
+                }
+
+                console.log(
+                    "ACTION APPLIED",
+                    {
+                        action: action,
+                        score: getScore(),
+                        tileX: pacman.tile.x,
+                        tileY: pacman.tile.y
+                    }
+                );
+
+                setTimeout(function () {
+
+                    console.log(
+                        "AFTER 100ms",
+                        {
+                            score: getScore(),
+                            tileX: pacman.tile.x,
+                            tileY: pacman.tile.y
+                        }
+                    );
+
+                    neuralAI.sendTransition(
+                        oldState,
+                        oldScore,
+                        action
+                    );
+
+                }, 100);
+            }
+
+            else if (message.type === "reset") {
+
+                neuralAI.waitingForReset = true;
+
+                neuralAI.previousScore =
+                    getScore();
+
+                console.log(
+                    "RESET",
+                    {
+                        score: neuralAI.previousScore
+                    }
+                );
+
+                var waitForPlayableState = function () {
+
+                    var gameState =
+                        (typeof window !== "undefined"
+                            ? window.state
+                            : typeof state !== "undefined"
+                                ? state
+                                : undefined);
+
+                    var gamePlayState =
+                        (typeof window !== "undefined"
+                            ? window.playState
+                            : typeof playState !== "undefined"
+                                ? playState
+                                : undefined);
+
+                    var gameOverState =
+                        (typeof window !== "undefined"
+                            ? window.overState
+                            : typeof overState !== "undefined"
+                                ? overState
+                                : undefined);
+
+                    var gameHomeState =
+                        (typeof window !== "undefined"
+                            ? window.homeState
+                            : typeof homeState !== "undefined"
+                                ? homeState
+                                : undefined);
+
+                    var gamePreNewGameState =
+                        (typeof window !== "undefined"
+                            ? window.preNewGameState
+                            : typeof preNewGameState !== "undefined"
+                                ? preNewGameState
+                                : undefined);
+
+                    if (typeof newGameState !== "undefined" && typeof switchState !== "undefined") {
+                        if (gameState === gameOverState || gameState === gameHomeState || gameState === gamePreNewGameState) {
+                            console.log("Forcing new game state for RL training");
+                            if (typeof window !== "undefined") {
+                                window.practiceMode = false;
+                                window.turboMode = false;
+                            }
+                            if (typeof practiceMode !== "undefined") practiceMode = false;
+                            if (typeof turboMode !== "undefined") turboMode = false;
+                            newGameState.setStartLevel(1);
+                            switchState(newGameState);
+
+
+                        }
+                    }
+
+                    if (
+                        typeof gameState !== "undefined" &&
+                        typeof gamePlayState !== "undefined" &&
+                        gameState !== gamePlayState
+                    ) {
+                        setTimeout(
+                            waitForPlayableState,
+                            50
+                        );
+                        return;
+                    }
+
+                    neuralAI.waitingForReset = false;
+                    neuralAI.sendState();
+                };
+
+                waitForPlayableState();
             }
         };
 
-        this.socket.onclose = function() {
+        this.socket.onclose = function () {
             console.log("Disconnected from Python AI");
+        };
+
+        this.socket.onerror = function (error) {
+            console.error("WebSocket error:", error);
         };
     },
 
-    // sends the current game state to the Python AI server
-    sendState: function() {
+    sendState: function () {
 
-        if (!this.socket ||
-            this.socket.readyState !== WebSocket.OPEN) {
+        if (
+            !this.socket ||
+            this.socket.readyState !== WebSocket.OPEN
+        ) {
             return;
         }
 
-        var state = this.getStateVector();
+        var gameState =
+            (typeof state !== "undefined"
+                ? state
+                : typeof window !== "undefined"
+                    ? window.state
+                    : undefined);
+
+        var gamePlayState =
+            (typeof playState !== "undefined"
+                ? playState
+                : typeof window !== "undefined"
+                    ? window.playState
+                    : undefined);
+
+        var gameOverState =
+            (typeof overState !== "undefined"
+                ? overState
+                : typeof window !== "undefined"
+                    ? window.overState
+                    : undefined);
+
+        if (
+            typeof gameState !== "undefined" &&
+            gameState === gameOverState
+        ) {
+            console.warn(
+                "sendState skipped: game is over"
+            );
+
+            if (!this.waitingForReset) {
+                var self = this;
+                var currentScore = typeof getScore !== "undefined" ? getScore() : 0;
+                var reward = -10; // death penalty
+
+                console.log(
+                    "GAME OVER (Missed Transition Recovery)",
+                    {
+                        score: currentScore,
+                        reward: reward
+                    }
+                );
+
+                this.socket.send(
+                    JSON.stringify({
+                        type: "transition",
+                        state: self.lastState || self.getStateVector(),
+                        action: self.lastAction !== undefined ? self.lastAction : 0,
+                        next_state: self.getStateVector(),
+                        reward: reward,
+                        done: true
+                    })
+                );
+
+                this.waitingForReset = true;
+            }
+            return;
+        }
+
+        if (
+            typeof gameState !== "undefined" &&
+            typeof gamePlayState !== "undefined" &&
+            gameState !== gamePlayState
+        ) {
+            var self = this;
+            console.warn(
+                "sendState delayed: game is not in play state"
+            );
+            setTimeout(function () {
+                self.sendState();
+            }, 50);
+            return;
+        }
+
+        var state =
+            this.getStateVector();
+
+        if (!state) {
+            console.warn(
+                "sendState skipped: state unavailable"
+            );
+            return;
+        }
 
         this.socket.send(
             JSON.stringify({
@@ -182,5 +490,281 @@ var neuralAI = {
                 state: state
             })
         );
+    },
+
+    sendTransition: function (
+        oldState,
+        oldScore,
+        action
+    ) {
+
+        if (
+            !this.socket ||
+            this.socket.readyState !== WebSocket.OPEN
+        ) {
+            return;
+        }
+
+        this.lastState = oldState;
+        this.lastAction = action;
+
+        var self = this;
+        var currentScore =
+            getScore();
+
+        var scoreReward =
+            currentScore - oldScore;
+
+        var gameState =
+            (typeof state !== "undefined"
+                ? state
+                : typeof window !== "undefined"
+                    ? window.state
+                    : undefined);
+
+        var gameDeadState =
+            (typeof deadState !== "undefined"
+                ? deadState
+                : typeof window !== "undefined"
+                    ? window.deadState
+                    : undefined);
+
+        var gameOverState =
+            (typeof overState !== "undefined"
+                ? overState
+                : typeof window !== "undefined"
+                    ? window.overState
+                    : undefined);
+
+        var terminalTransition =
+            typeof gameState !== "undefined" &&
+            typeof gameDeadState !== "undefined" &&
+            gameState === gameDeadState &&
+            typeof extraLives !== "undefined" &&
+            extraLives === 0;
+
+        var deadTransition = false;
+
+        var sendTransitionNow = function () {
+            var gameStateNow =
+                (typeof state !== "undefined"
+                    ? state
+                    : typeof window !== "undefined"
+                        ? window.state
+                        : undefined);
+
+            if (
+                typeof gameStateNow !== "undefined" &&
+                typeof gameDeadState !== "undefined" &&
+                gameStateNow === gameDeadState
+            ) {
+                console.warn(
+                    "Waiting for deadState to finish before sending transition"
+                );
+                setTimeout(sendTransitionNow, 50);
+                return;
+            }
+
+            var nextState =
+                self.getStateVector();
+
+            if (!nextState) {
+                nextState = oldState;
+            }
+
+            var done =
+                terminalTransition || (
+                    typeof gameStateNow !== "undefined" &&
+                    typeof gameOverState !== "undefined" &&
+                    gameStateNow === gameOverState
+                );
+
+            var reward = 0;
+
+            if (deadTransition) {
+                reward = -10;
+                console.log(
+                    "DEATH TRANSITION",
+                    {
+                        score: currentScore,
+                        reward: reward,
+                        done: done,
+                        terminalTransition: terminalTransition
+                    }
+                );
+
+            } else if (done) {
+                reward = -10;
+                console.log(
+                    "GAME OVER",
+                    {
+                        score: currentScore,
+                        reward: reward
+                    }
+                );
+
+            } else if (scoreReward === 50) {
+                reward = 10;
+                console.log(
+                    "ENERGIZER",
+                    {
+                        scoreChange: scoreReward,
+                        reward: reward
+                    }
+                );
+
+            } else if (scoreReward === 10) {
+                reward = 1;
+                console.log(
+                    "PELLET",
+                    {
+                        scoreChange: scoreReward,
+                        reward: reward
+                    }
+                );
+
+            } else {
+                reward = 0;
+            }
+
+            neuralAI.previousScore =
+                currentScore;
+
+            self.socket.send(
+                JSON.stringify({
+                    type: "transition",
+                    state: oldState,
+                    action: action,
+                    next_state: nextState,
+                    reward: reward,
+                    done: done
+                })
+            );
+
+            console.log(
+                "TRANSITION",
+                {
+                    action: action,
+                    oldScore: oldScore,
+                    currentScore: currentScore,
+                    scoreChange: scoreReward,
+                    reward: reward,
+                    done: done
+                }
+            );
+
+            if (!done) {
+                setTimeout(function () {
+                    self.sendState();
+                }, 50);
+            }
+        };
+
+        if (
+            typeof gameState !== "undefined" &&
+            gameState === gameDeadState
+        ) {
+            deadTransition = true;
+            setTimeout(sendTransitionNow, 50);
+            return;
+        }
+
+        sendTransitionNow();
     }
 };
+
+// Automatically connect and start game on load
+if (typeof window !== "undefined") {
+    window.addEventListener("load", function () {
+        if (!neuralAI.socket) {
+            neuralAI.connect();
+        }
+
+        var checkAndStart = function () {
+            var gameState =
+                (typeof window !== "undefined"
+                    ? window.state
+                    : typeof state !== "undefined"
+                        ? state
+                        : undefined);
+
+            var gameHomeState =
+                (typeof window !== "undefined"
+                    ? window.homeState
+                    : typeof homeState !== "undefined"
+                        ? homeState
+                        : undefined);
+
+            var gamePreNewGameState =
+                (typeof window !== "undefined"
+                    ? window.preNewGameState
+                    : typeof preNewGameState !== "undefined"
+                        ? preNewGameState
+                        : undefined);
+
+            var gameNewGameState =
+                (typeof window !== "undefined"
+                    ? window.newGameState
+                    : typeof newGameState !== "undefined"
+                        ? newGameState
+                        : undefined);
+
+            var gamePlayState =
+                (typeof window !== "undefined"
+                    ? window.playState
+                    : typeof playState !== "undefined"
+                        ? playState
+                        : undefined);
+
+            if (gameState === gameHomeState || gameState === gamePreNewGameState || gameState === undefined || gameState === gameNewGameState) {
+                console.log("Auto-starting game from ai.js");
+                if (typeof window !== "undefined") {
+                    window.practiceMode = false;
+                    window.turboMode = false;
+                }
+                if (typeof practiceMode !== "undefined") practiceMode = false;
+                if (typeof turboMode !== "undefined") turboMode = false;
+
+                if (typeof newGameState !== "undefined" && typeof switchState !== "undefined") {
+                    if (gameState !== gameNewGameState) {
+                        newGameState.setStartLevel(1);
+                        switchState(newGameState);
+                    }
+                }
+
+
+
+                neuralAI.waitingForReset = true;
+                var waitForPlayableState = function () {
+                    var gameStateNow =
+                        (typeof window !== "undefined"
+                            ? window.state
+                            : typeof state !== "undefined"
+                                ? state
+                                : undefined);
+
+                    if (gameStateNow !== gamePlayState) {
+                        setTimeout(waitForPlayableState, 50);
+                        return;
+                    }
+
+
+
+                    neuralAI.waitingForReset = false;
+                    neuralAI.sendState();
+                };
+                waitForPlayableState();
+            } else if (gameState === gamePlayState) {
+                if (typeof window !== "undefined") window.practiceMode = false;
+                if (typeof practiceMode !== "undefined") practiceMode = false;
+
+                neuralAI.sendState();
+            } else {
+                setTimeout(checkAndStart, 100);
+            }
+        };
+
+        // Give the main game script time to initialize the state
+        setTimeout(checkAndStart, 500);
+    });
+}
