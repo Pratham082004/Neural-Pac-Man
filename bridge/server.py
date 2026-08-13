@@ -536,6 +536,7 @@ async def handle_connection(websocket):
             if message_type == "state":
 
                 state = data["state"]
+                print(f"[SERVER] State received (len: {len(state)})")
 
                 if MODE == "eval":
 
@@ -550,6 +551,8 @@ async def handle_connection(websocket):
                     action = agent.choose_action(
                         state
                     )
+
+                print(f"[SERVER] Sending action: {action}")
 
                 await websocket.send(
                     json.dumps({

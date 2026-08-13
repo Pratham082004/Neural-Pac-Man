@@ -1,6 +1,6 @@
-var executive = (function(){
+var executive = (function () {
 
-    var framePeriod = 1000/60; // length of each frame at 60Hz (updates per second)
+    var framePeriod = 1000 / 60; // length of each frame at 60Hz (updates per second)
     var gameTime; // virtual time of the last game update
 
     var paused = false; // flag for pausing the state updates, while still drawing
@@ -13,34 +13,34 @@ var executive = (function(){
     // requestAnimationFrame polyfill by Erik Möller
     // fixes from Paul Irish and Tino Zijdel
 
-    (function() {
+    (function () {
         var lastTime = 0;
         var vendors = ['ms', 'moz', 'webkit', 'o'];
-        for(var x = 0; x < vendors.length && !window.requestAnimationFrame; ++x) {
-            window.requestAnimationFrame = window[vendors[x]+'RequestAnimationFrame'];
-            window.cancelAnimationFrame = window[vendors[x]+'CancelAnimationFrame']
-                                       || window[vendors[x]+'CancelRequestAnimationFrame'];
+        for (var x = 0; x < vendors.length && !window.requestAnimationFrame; ++x) {
+            window.requestAnimationFrame = window[vendors[x] + 'RequestAnimationFrame'];
+            window.cancelAnimationFrame = window[vendors[x] + 'CancelAnimationFrame']
+                || window[vendors[x] + 'CancelRequestAnimationFrame'];
         }
-     
+
         if (!window.requestAnimationFrame)
-            window.requestAnimationFrame = function(callback, element) {
+            window.requestAnimationFrame = function (callback, element) {
                 var currTime = new Date().getTime();
                 var timeToCall = Math.max(0, 16 - (currTime - lastTime));
-                var id = window.setTimeout(function() { callback(currTime + timeToCall); },
-                  timeToCall);
+                var id = window.setTimeout(function () { callback(currTime + timeToCall); },
+                    timeToCall);
                 lastTime = currTime + timeToCall;
                 return id;
             };
-     
+
         if (!window.cancelAnimationFrame)
-            window.cancelAnimationFrame = function(id) {
+            window.cancelAnimationFrame = function (id) {
                 clearTimeout(id);
             };
     }());
     /**********/
 
     var fps;
-    var updateFps = (function(){
+    var updateFps = (function () {
         // TODO: fix this to reflect the average rate of the last n frames, where 0 < n < 60
         var length = 60;
         var times = [];
@@ -48,12 +48,12 @@ var executive = (function(){
         var endIndex = -1;
         var filled = false;
 
-        return function(now) {
+        return function (now) {
             if (filled) {
-                startIndex = (startIndex+1) % length;
+                startIndex = (startIndex + 1) % length;
             }
-            endIndex = (endIndex+1) % length;
-            if (endIndex == length-1) {
+            endIndex = (endIndex + 1) % length;
+            if (endIndex == length - 1) {
                 filled = true;
             }
 
@@ -67,10 +67,10 @@ var executive = (function(){
             fps = frames / seconds;
         };
     })();
-        
+
 
     var reqFrame; // id of requestAnimationFrame object
-    var tick = function(now) {
+    var tick = function (now) {
         if (gameTime == undefined) {
             gameTime = now;
         }
@@ -80,7 +80,7 @@ var executive = (function(){
 
         // Control frame-skipping by only allowing gameTime to lag behind the current time by some amount.
         var maxFrameSkip = 3;
-        gameTime = Math.max(gameTime, now-maxFrameSkip*framePeriod);
+        gameTime = Math.max(gameTime, now - maxFrameSkip * framePeriod);
 
         // Prevent any updates from being called when paused.
         if (paused || inGameMenu.isOpen()) {
@@ -109,34 +109,34 @@ var executive = (function(){
 
     return {
 
-        getFramePeriod: function() {
+        getFramePeriod: function () {
             return framePeriod;
         },
-        setUpdatesPerSecond: function(ups) {
-            framePeriod = 1000/ups;
+        setUpdatesPerSecond: function (ups) {
+            framePeriod = 1000 / ups;
             //gameTime = undefined;
             vcr.onFramePeriodChange();
         },
-        init: function() {
+        init: function () {
             var that = this;
-            window.addEventListener('focus', function() {that.start();});
-            window.addEventListener('blur', function() {that.stop();});
+            window.addEventListener('focus', function () { that.start(); });
+            window.addEventListener('blur', function () { that.stop(); });
             this.start();
         },
-        start: function() {
+        start: function () {
             if (!running) {
                 reqFrame = requestAnimationFrame(tick);
                 running = true;
             }
         },
-        stop: function() {
+        stop: function () {
             if (running) {
                 cancelAnimationFrame(reqFrame);
                 running = false;
             }
         },
-        togglePause: function() { paused = !paused; },
-        isPaused: function() { return paused; },
-        getFps: function() { return fps; },
+        togglePause: function () { paused = !paused; },
+        isPaused: function () { return paused; },
+        getFps: function () { return fps; },
     };
 })();

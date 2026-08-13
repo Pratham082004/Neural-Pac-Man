@@ -275,6 +275,7 @@ var neuralAI = {
             !map ||
             typeof getOpenTiles !== "function"
         ) {
+            console.warn("getStateVector returning null due to missing globals (pacman, map, or getOpenTiles)");
             return null;
         }
 
@@ -1108,16 +1109,16 @@ var neuralAI = {
         // =============================================================
 
         if (action === 0)
-            this.up();
+            pacman.setInputDir(DIR_UP);
 
         else if (action === 1)
-            this.left();
+            pacman.setInputDir(DIR_LEFT);
 
         else if (action === 2)
-            this.down();
+            pacman.setInputDir(DIR_DOWN);
 
         else if (action === 3)
-            this.right();
+            pacman.setInputDir(DIR_RIGHT);
 
         else {
 
@@ -1262,6 +1263,7 @@ var neuralAI = {
         }
 
 
+        console.log("Sending state to Python (len: " + stateVector.length + ")");
         this.socket.send(
             JSON.stringify({
 
@@ -1282,15 +1284,15 @@ var neuralAI = {
 
     waitUntilPlayable: function (callback) {
 
-        if (this.waitingForPlayable)
+        if (this.waitingForPlayable) {
+            this.playableCallback = callback;
             return;
-
+        }
 
         this.waitingForPlayable = true;
-
+        this.playableCallback = callback;
 
         var attempts = 0;
-
 
         var check = function () {
 
@@ -1299,7 +1301,6 @@ var neuralAI = {
 
             var playState =
                 neuralAI.getPlayState();
-
 
             if (
                 typeof gameState !== "undefined" &&
@@ -1310,10 +1311,8 @@ var neuralAI = {
                 neuralAI.waitingForPlayable =
                     false;
 
-
-                if (typeof callback === "function")
-                    callback();
-
+                if (typeof neuralAI.playableCallback === "function")
+                    neuralAI.playableCallback();
 
                 return;
             }
@@ -1802,19 +1801,19 @@ var neuralAI = {
 
                 var oldDist =
                     oldState[
-                        12 + i * 5
+                    12 + i * 5
                     ] * 30;
 
 
                 var nextDist =
                     nextState[
-                        12 + i * 5
+                    12 + i * 5
                     ] * 30;
 
 
                 var isDangerous =
                     nextState[
-                        14 + i * 5
+                    14 + i * 5
                     ] === 1;
 
 
