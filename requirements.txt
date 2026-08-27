@@ -1,4 +1,8 @@
-websockets
-numpy
-torch
+# Deep Learning Backend
+torch>=2.0.0
 
+# Scientific Computing & Array Manipulation
+numpy>=1.24.0
+
+# Real-time WebSocket Communication Bridge
+websockets>=11.0
