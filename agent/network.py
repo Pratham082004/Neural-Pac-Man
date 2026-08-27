@@ -3,7 +3,7 @@ import torch.nn as nn
 
 class DQN(nn.Module):
 
-    def __init__(self, state_size=45, action_size=4):
+    def __init__(self, state_size=72, action_size=4):
         super().__init__()
 
         self.network = nn.Sequential(
@@ -29,8 +29,8 @@ if __name__ == "__main__":
 
     print(model)
 
-    # Fake Pac-Man state (V2)
-    state = torch.randn(1, 45)
+    # Fake Pac-Man state (V3)
+    state = torch.randn(1, 72)
 
     q_values = model(state)
 

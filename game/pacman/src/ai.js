@@ -1,21 +1,4 @@
-//////////////////////////////////////////////////////////////////////////////////////
-// Neural Pac-Man AI Interface
-//
-// V2
-// - 45-dimensional state vector
-// - Pellet / Energizer / Ghost / Level rewards
-// - Ghost danger shaping
-// - Controlled episode synchronization
-// - Automatic game reset
-// - No infinite sendState polling
-// - No duplicate terminal transitions
-//////////////////////////////////////////////////////////////////////////////////////
-
 var neuralAI = {
-
-    // =========================================================================
-    // CONNECTION / STATE
-    // =========================================================================
 
     socket: null,
 
@@ -35,52 +18,223 @@ var neuralAI = {
     MAX_WAIT_ATTEMPTS: 100,
     WAIT_INTERVAL: 50,
 
+    visitedTiles: [],
+    VISITED_TILES_MAX: 15,
+    stepsSinceLastPellet: 0,
 
-    // =========================================================================
-    // MOVEMENT
-    // =========================================================================
+    bfsPelletDistance: function (startTile, dirEnum) {
+
+        if (
+            typeof map === "undefined" ||
+            !map ||
+            !map.currentTiles ||
+            typeof getOpenTiles !== "function"
+        ) {
+            return 1.0;
+        }
+
+        var queue = [];
+        var visited = {};
+
+        var dx = 0;
+        var dy = 0;
+
+        if (dirEnum === DIR_UP) dy = -1;
+        else if (dirEnum === DIR_DOWN) dy = 1;
+        else if (dirEnum === DIR_LEFT) dx = -1;
+        else if (dirEnum === DIR_RIGHT) dx = 1;
+
+        var firstX = startTile.x + dx;
+        var firstY = startTile.y + dy;
+
+        if (
+            firstX < 0 || firstX >= map.numCols ||
+            firstY < 0 || firstY >= map.numRows
+        ) {
+            return 1.0;
+        }
+
+        var firstIndex = firstY * map.numCols + firstX;
+        var firstTile = map.currentTiles[firstIndex];
+
+        if (
+            firstTile === "|" ||
+            firstTile === "-" ||
+            firstTile === "_"
+        ) {
+            return 1.0;
+        }
+
+        queue.push({ x: firstX, y: firstY, dist: 1 });
+        visited[firstX + "," + firstY] = true;
+
+        var maxSearch = 15;
+
+        while (queue.length > 0 && maxSearch > 0) {
+
+            maxSearch--;
+            var current = queue.shift();
+
+            var idx = current.y * map.numCols + current.x;
+            var tile = map.currentTiles[idx];
+
+            if (tile === "." || tile === "o") {
+                return Math.min(current.dist / 15.0, 1.0);
+            }
+
+            var neighbors = [
+                { x: current.x, y: current.y - 1 },
+                { x: current.x, y: current.y + 1 },
+                { x: current.x - 1, y: current.y },
+                { x: current.x + 1, y: current.y }
+            ];
+
+            for (var n = 0; n < neighbors.length; n++) {
+
+                var nx = neighbors[n].x;
+                var ny = neighbors[n].y;
+                var key = nx + "," + ny;
+
+                if (
+                    nx < 0 || nx >= map.numCols ||
+                    ny < 0 || ny >= map.numRows ||
+                    visited[key]
+                ) {
+                    continue;
+                }
+
+                var nIdx = ny * map.numCols + nx;
+                var nTile = map.currentTiles[nIdx];
+
+                if (
+                    nTile !== "|" &&
+                    nTile !== "-" &&
+                    nTile !== "_"
+                ) {
+                    visited[key] = true;
+                    queue.push({ x: nx, y: ny, dist: current.dist + 1 });
+                }
+            }
+        }
+
+        return 1.0;
+    },
+
+    isCorridorOrDeadEnd: function (startTile, dirEnum) {
+
+        if (
+            typeof map === "undefined" ||
+            !map ||
+            !map.currentTiles
+        ) {
+            return 0;
+        }
+
+        var dx = 0;
+        var dy = 0;
+
+        if (dirEnum === DIR_UP) dy = -1;
+        else if (dirEnum === DIR_DOWN) dy = 1;
+        else if (dirEnum === DIR_LEFT) dx = -1;
+        else if (dirEnum === DIR_RIGHT) dx = 1;
+
+        var cx = startTile.x + dx;
+        var cy = startTile.y + dy;
+
+        var steps = 0;
+        var openExits = 0;
+
+        for (var step = 0; step < 5; step++) {
+
+            if (
+                cx < 0 || cx >= map.numCols ||
+                cy < 0 || cy >= map.numRows
+            ) {
+                break;
+            }
+
+            var idx = cy * map.numCols + cx;
+            var tile = map.currentTiles[idx];
+
+            if (
+                tile === "|" ||
+                tile === "-" ||
+                tile === "_"
+            ) {
+                break;
+            }
+
+            steps++;
+
+            var perpDirs;
+            if (dx !== 0) {
+                perpDirs = [{ x: 0, y: -1 }, { x: 0, y: 1 }];
+            } else {
+                perpDirs = [{ x: -1, y: 0 }, { x: 1, y: 0 }];
+            }
+
+            for (var p = 0; p < perpDirs.length; p++) {
+                var px = cx + perpDirs[p].x;
+                var py = cy + perpDirs[p].y;
+
+                if (
+                    px >= 0 && px < map.numCols &&
+                    py >= 0 && py < map.numRows
+                ) {
+                    var pIdx = py * map.numCols + px;
+                    var pTile = map.currentTiles[pIdx];
+
+                    if (
+                        pTile !== "|" &&
+                        pTile !== "-" &&
+                        pTile !== "_"
+                    ) {
+                        openExits++;
+                    }
+                }
+            }
+
+            cx += dx;
+            cy += dy;
+        }
+
+        if (steps === 0) {
+            return 1.0;
+        }
+
+        return Math.max(0, 1.0 - (openExits / (steps * 2.0)));
+    },
+
+    resetTracking: function () {
+        this.visitedTiles = [];
+        this.stepsSinceLastPellet = 0;
+    },
 
     setDirection: function (dirEnum) {
-
-        if (!pacman)
-            return;
-
+        if (!pacman) return;
         pacman.setInputDir(dirEnum);
     },
 
-
     stop: function () {
-
-        if (!pacman)
-            return;
-
+        if (!pacman) return;
         pacman.clearInputDir();
     },
-
 
     up: function () {
         this.setDirection(DIR_UP);
     },
 
-
     left: function () {
         this.setDirection(DIR_LEFT);
     },
-
 
     down: function () {
         this.setDirection(DIR_DOWN);
     },
 
-
     right: function () {
         this.setDirection(DIR_RIGHT);
     },
-
-
-    // =========================================================================
-    // RAW STATE
-    // =========================================================================
 
     getState: function () {
 
@@ -122,150 +276,71 @@ var neuralAI = {
         };
     },
 
-
-    // =========================================================================
-    // GAME STATE HELPERS
-    // =========================================================================
-
     getGameState: function () {
-
-        if (typeof window !== "undefined" &&
-            typeof window.state !== "undefined") {
-
+        if (typeof window !== "undefined" && typeof window.state !== "undefined") {
             return window.state;
         }
-
-        if (typeof state !== "undefined")
-            return state;
-
+        if (typeof state !== "undefined") return state;
         return undefined;
     },
-
 
     getPlayState: function () {
-
-        if (typeof window !== "undefined" &&
-            typeof window.playState !== "undefined") {
-
+        if (typeof window !== "undefined" && typeof window.playState !== "undefined") {
             return window.playState;
         }
-
-        if (typeof playState !== "undefined")
-            return playState;
-
+        if (typeof playState !== "undefined") return playState;
         return undefined;
     },
-
 
     getDeadState: function () {
-
-        if (typeof window !== "undefined" &&
-            typeof window.deadState !== "undefined") {
-
+        if (typeof window !== "undefined" && typeof window.deadState !== "undefined") {
             return window.deadState;
         }
-
-        if (typeof deadState !== "undefined")
-            return deadState;
-
+        if (typeof deadState !== "undefined") return deadState;
         return undefined;
     },
-
 
     getOverState: function () {
-
-        if (typeof window !== "undefined" &&
-            typeof window.overState !== "undefined") {
-
+        if (typeof window !== "undefined" && typeof window.overState !== "undefined") {
             return window.overState;
         }
-
-        if (typeof overState !== "undefined")
-            return overState;
-
+        if (typeof overState !== "undefined") return overState;
         return undefined;
     },
-
 
     getFinishState: function () {
-
-        if (typeof window !== "undefined" &&
-            typeof window.finishState !== "undefined") {
-
+        if (typeof window !== "undefined" && typeof window.finishState !== "undefined") {
             return window.finishState;
         }
-
-        if (typeof finishState !== "undefined")
-            return finishState;
-
+        if (typeof finishState !== "undefined") return finishState;
         return undefined;
     },
-
 
     getHomeState: function () {
-
-        if (typeof window !== "undefined" &&
-            typeof window.homeState !== "undefined") {
-
+        if (typeof window !== "undefined" && typeof window.homeState !== "undefined") {
             return window.homeState;
         }
-
-        if (typeof homeState !== "undefined")
-            return homeState;
-
+        if (typeof homeState !== "undefined") return homeState;
         return undefined;
     },
-
 
     getPreNewGameState: function () {
-
-        if (typeof window !== "undefined" &&
-            typeof window.preNewGameState !== "undefined") {
-
+        if (typeof window !== "undefined" && typeof window.preNewGameState !== "undefined") {
             return window.preNewGameState;
         }
-
-        if (typeof preNewGameState !== "undefined")
-            return preNewGameState;
-
+        if (typeof preNewGameState !== "undefined") return preNewGameState;
         return undefined;
     },
-
 
     getNewGameState: function () {
-
-        if (typeof window !== "undefined" &&
-            typeof window.newGameState !== "undefined") {
-
+        if (typeof window !== "undefined" && typeof window.newGameState !== "undefined") {
             return window.newGameState;
         }
-
-        if (typeof newGameState !== "undefined")
-            return newGameState;
-
+        if (typeof newGameState !== "undefined") return newGameState;
         return undefined;
     },
 
 
-    // =========================================================================
-    // STATE VECTOR
-    //
-    // TOTAL:
-    //
-    // Pac-Man position                 2
-    // Pac-Man direction               4
-    // Open directions                 4
-    // Ghost information               20
-    // Nearest pellet                  3
-    // Nearest energizer               3
-    // Nearest dangerous ghost         3
-    // Nearest scared ghost            3
-    // Dots eaten                      1
-    // Energizer active                1
-    // Immediate danger                1
-    //
-    // TOTAL = 45
-    // =========================================================================
 
     getStateVector: function () {
 
@@ -273,51 +348,35 @@ var neuralAI = {
             !pacman ||
             typeof map === "undefined" ||
             !map ||
-            typeof getOpenTiles !== "function"
+            typeof getOpenTiles !== "function" ||
+            typeof ghosts === "undefined" ||
+            !ghosts
         ) {
-            console.warn("getStateVector returning null due to missing globals (pacman, map, or getOpenTiles)");
+            console.warn("getStateVector returning null due to missing globals (pacman, map, getOpenTiles, or ghosts)");
             return null;
         }
 
         var state = [];
 
-        // =====================================================================
-        // PAC-MAN POSITION
-        // =====================================================================
-
         state.push(
             pacman.tile.x / Math.max(1, map.numCols)
         );
-
         state.push(
             pacman.tile.y / Math.max(1, map.numRows)
         );
 
-
-        // =====================================================================
-        // PAC-MAN DIRECTION
-        // =====================================================================
-
         state.push(
             pacman.dirEnum === DIR_UP ? 1 : 0
         );
-
         state.push(
             pacman.dirEnum === DIR_DOWN ? 1 : 0
         );
-
         state.push(
             pacman.dirEnum === DIR_LEFT ? 1 : 0
         );
-
         state.push(
             pacman.dirEnum === DIR_RIGHT ? 1 : 0
         );
-
-
-        // =====================================================================
-        // OPEN DIRECTIONS
-        // =====================================================================
 
         var openTiles = getOpenTiles(
             pacman.tile,
@@ -327,30 +386,72 @@ var neuralAI = {
         state.push(
             openTiles[DIR_UP] ? 1 : 0
         );
-
         state.push(
             openTiles[DIR_DOWN] ? 1 : 0
         );
-
         state.push(
             openTiles[DIR_LEFT] ? 1 : 0
         );
-
         state.push(
             openTiles[DIR_RIGHT] ? 1 : 0
         );
 
+        state.push(
+            this.bfsPelletDistance(pacman.tile, DIR_UP)
+        );
+        state.push(
+            this.bfsPelletDistance(pacman.tile, DIR_DOWN)
+        );
+        state.push(
+            this.bfsPelletDistance(pacman.tile, DIR_LEFT)
+        );
+        state.push(
+            this.bfsPelletDistance(pacman.tile, DIR_RIGHT)
+        );
 
-        // =====================================================================
-        // GHOST INFORMATION
-        // 5 values per ghost
-        //
-        // dx
-        // dy
-        // distance
-        // scared
-        // dangerous
-        // =====================================================================
+        var pelletsNW = 0;
+        var pelletsNE = 0;
+        var pelletsSW = 0;
+        var pelletsSE = 0;
+        var pelletsTotal = 0;
+
+        if (
+            map.currentTiles &&
+            typeof map.numTiles !== "undefined"
+        ) {
+
+            for (
+                var qi = 0;
+                qi < map.numTiles;
+                qi++
+            ) {
+
+                var qTile = map.currentTiles[qi];
+
+                if (qTile === "." || qTile === "o") {
+
+                    pelletsTotal++;
+
+                    var qx = qi % map.numCols;
+                    var qy = Math.floor(qi / map.numCols);
+
+                    if (qy <= pacman.tile.y) {
+                        if (qx <= pacman.tile.x) pelletsNW++;
+                        else pelletsNE++;
+                    } else {
+                        if (qx <= pacman.tile.x) pelletsSW++;
+                        else pelletsSE++;
+                    }
+                }
+            }
+        }
+
+        var pTotal = Math.max(1, pelletsTotal);
+
+        state.push(pelletsNW / pTotal);
+        state.push(pelletsNE / pTotal);
+        state.push(pelletsSW / pTotal);
+        state.push(pelletsSE / pTotal);
 
         var immediateDanger = 0;
 
@@ -362,6 +463,10 @@ var neuralAI = {
         var nearestScaredDx = 0;
         var nearestScaredDy = 0;
 
+        var ghostAlarmUp = 0;
+        var ghostAlarmDown = 0;
+        var ghostAlarmLeft = 0;
+        var ghostAlarmRight = 0;
 
         ghosts.forEach(function (ghost) {
 
@@ -389,15 +494,18 @@ var neuralAI = {
                 ghost.mode === 0 &&
                 !ghost.scared;
 
-
             if (
                 isDangerous &&
                 distance <= 3
             ) {
 
                 immediateDanger = 1;
-            }
 
+                if (dy < 0 && Math.abs(dy) >= Math.abs(dx)) ghostAlarmUp = 1;
+                if (dy > 0 && Math.abs(dy) >= Math.abs(dx)) ghostAlarmDown = 1;
+                if (dx < 0 && Math.abs(dx) > Math.abs(dy)) ghostAlarmLeft = 1;
+                if (dx > 0 && Math.abs(dx) > Math.abs(dy)) ghostAlarmRight = 1;
+            }
 
             if (
                 isDangerous &&
@@ -410,7 +518,6 @@ var neuralAI = {
                 nearestDangerousDy = dy;
             }
 
-
             if (
                 ghost.mode === 0 &&
                 ghost.scared &&
@@ -422,7 +529,6 @@ var neuralAI = {
                 nearestScaredDx = dx;
                 nearestScaredDy = dy;
             }
-
 
             state.push(dx / 30);
             state.push(dy / 30);
@@ -437,15 +543,9 @@ var neuralAI = {
             );
         });
 
-
-        // =====================================================================
-        // NEAREST PELLET
-        // =====================================================================
-
         var nearestPelletDist = Infinity;
         var nearestPelletDx = 0;
         var nearestPelletDy = 0;
-
 
         if (
             map.currentTiles &&
@@ -474,18 +574,17 @@ var neuralAI = {
                             i / map.numCols
                         );
 
-                    var dx =
+                    var pdx =
                         x -
                         pacman.tile.x;
 
-                    var dy =
+                    var pdy =
                         y -
                         pacman.tile.y;
 
                     var distSq =
-                        dx * dx +
-                        dy * dy;
-
+                        pdx * pdx +
+                        pdy * pdy;
 
                     if (
                         distSq <
@@ -496,15 +595,14 @@ var neuralAI = {
                             distSq;
 
                         nearestPelletDx =
-                            dx;
+                            pdx;
 
                         nearestPelletDy =
-                            dy;
+                            pdy;
                     }
                 }
             }
         }
-
 
         if (
             nearestPelletDist === Infinity
@@ -537,15 +635,9 @@ var neuralAI = {
             );
         }
 
-
-        // =====================================================================
-        // NEAREST ENERGIZER
-        // =====================================================================
-
         var nearestEnDist = Infinity;
         var nearestEnDx = 0;
         var nearestEnDy = 0;
-
 
         if (map.energizers) {
 
@@ -561,38 +653,36 @@ var neuralAI = {
                         map.currentTiles[index] === "o"
                     ) {
 
-                        var dx =
+                        var edx =
                             en.x -
                             pacman.tile.x;
 
-                        var dy =
+                        var edy =
                             en.y -
                             pacman.tile.y;
 
-                        var distSq =
-                            dx * dx +
-                            dy * dy;
-
+                        var eDistSq =
+                            edx * edx +
+                            edy * edy;
 
                         if (
-                            distSq <
+                            eDistSq <
                             nearestEnDist
                         ) {
 
                             nearestEnDist =
-                                distSq;
+                                eDistSq;
 
                             nearestEnDx =
-                                dx;
+                                edx;
 
                             nearestEnDy =
-                                dy;
+                                edy;
                         }
                     }
                 }
             );
         }
-
 
         if (
             nearestEnDist === Infinity
@@ -625,11 +715,6 @@ var neuralAI = {
             );
         }
 
-
-        // =====================================================================
-        // NEAREST DANGEROUS GHOST
-        // =====================================================================
-
         if (
             nearestDangerousDist === Infinity
         ) {
@@ -655,11 +740,6 @@ var neuralAI = {
                 )
             );
         }
-
-
-        // =====================================================================
-        // NEAREST SCARED GHOST
-        // =====================================================================
 
         if (
             nearestScaredDist === Infinity
@@ -687,11 +767,6 @@ var neuralAI = {
             );
         }
 
-
-        // =====================================================================
-        // GLOBAL GAME FEATURES
-        // =====================================================================
-
         state.push(
             map.dotsEaten /
             Math.max(
@@ -699,7 +774,6 @@ var neuralAI = {
                 map.numDots
             )
         );
-
 
         var energizerActive = 0;
 
@@ -719,35 +793,99 @@ var neuralAI = {
             energizerActive
         );
 
-
         state.push(
             immediateDanger
         );
 
+        var livesNorm = 0;
 
-        // =====================================================================
-        // SAFETY CHECK
-        // =====================================================================
+        if (typeof extraLives !== "undefined") {
+            livesNorm = Math.min(extraLives / 3.0, 1.0);
+        }
 
-        if (state.length !== 45) {
+        state.push(livesNorm);
+
+        state.push(
+            Math.min(this.stepsSinceLastPellet / 100.0, 1.0)
+        );
+
+        state.push(ghostAlarmUp);
+        state.push(ghostAlarmDown);
+        state.push(ghostAlarmLeft);
+        state.push(ghostAlarmRight);
+
+        state.push(
+            this.isCorridorOrDeadEnd(pacman.tile, DIR_UP)
+        );
+
+        state.push(
+            this.isCorridorOrDeadEnd(pacman.tile, DIR_DOWN)
+        );
+
+        state.push(
+            this.isCorridorOrDeadEnd(pacman.tile, DIR_LEFT)
+        );
+
+        state.push(
+            this.isCorridorOrDeadEnd(pacman.tile, DIR_RIGHT)
+        );
+
+        var levelNorm = 0;
+
+        if (typeof level !== "undefined") {
+            levelNorm = Math.min(level / 21.0, 1.0);
+        }
+
+        state.push(levelNorm);
+
+        var scoreNorm = 0;
+
+        if (typeof getScore === "function") {
+            scoreNorm = Math.min(getScore() / 10000.0, 1.0);
+        }
+
+        state.push(scoreNorm);
+
+        var totalWeight = pelletsNW + pelletsNE + pelletsSW + pelletsSE;
+
+        if (totalWeight > 0) {
+
+            state.push((pelletsNW + pelletsNE) / totalWeight);
+            state.push((pelletsSW + pelletsSE) / totalWeight);
+            state.push((pelletsNW + pelletsSW) / totalWeight);
+
+        } else {
+
+            state.push(0.25);
+            state.push(0.25);
+            state.push(0.25);
+        }
+
+        var reverseDir = pacman.dirEnum;
+
+        if (reverseDir === DIR_UP) reverseDir = DIR_DOWN;
+        else if (reverseDir === DIR_DOWN) reverseDir = DIR_UP;
+        else if (reverseDir === DIR_LEFT) reverseDir = DIR_RIGHT;
+        else if (reverseDir === DIR_RIGHT) reverseDir = DIR_LEFT;
+
+        state.push(reverseDir === DIR_UP ? 1 : 0);
+        state.push(reverseDir === DIR_DOWN ? 1 : 0);
+        state.push(reverseDir === DIR_LEFT ? 1 : 0);
+        state.push(reverseDir === DIR_RIGHT ? 1 : 0);
+
+        if (state.length !== 72) {
 
             console.error(
                 "INVALID STATE VECTOR SIZE:",
                 state.length,
-                "Expected: 45"
+                "Expected: 72"
             );
 
             return null;
         }
 
-
         return state;
     },
-
-
-    // =========================================================================
-    // BROWSER LOGGING
-    // =========================================================================
 
     setupBrowserLogging: function () {
 
@@ -770,7 +908,6 @@ var neuralAI = {
 
         console._originalError =
             console.error.bind(console);
-
 
         var sendBrowserLog =
             function (level, args) {
@@ -828,7 +965,6 @@ var neuralAI = {
                 }
             };
 
-
         console.log = function () {
 
             console._originalLog.apply(
@@ -843,7 +979,6 @@ var neuralAI = {
                 )
             );
         };
-
 
         console.info = function () {
 
@@ -860,7 +995,6 @@ var neuralAI = {
             );
         };
 
-
         console.debug = function () {
 
             console._originalDebug.apply(
@@ -875,7 +1009,6 @@ var neuralAI = {
                 )
             );
         };
-
 
         console.warn = function () {
 
@@ -892,7 +1025,6 @@ var neuralAI = {
             );
         };
 
-
         console.error = function () {
 
             console._originalError.apply(
@@ -908,6 +1040,7 @@ var neuralAI = {
             );
         };
     },
+
 
 
     // =========================================================================
@@ -1038,10 +1171,6 @@ var neuralAI = {
     },
 
 
-    // =========================================================================
-    // HANDLE ACTION
-    // =========================================================================
-
     handleAction: function (action) {
 
         if (
@@ -1058,10 +1187,8 @@ var neuralAI = {
             return;
         }
 
-
         var oldState =
             this.getStateVector();
-
 
         if (!oldState) {
 
@@ -1079,19 +1206,16 @@ var neuralAI = {
             return;
         }
 
-
         var oldScore =
             typeof getScore === "function"
                 ? getScore()
                 : 0;
-
 
         this.lastState =
             oldState;
 
         this.lastAction =
             action;
-
 
         console.log(
             "BEFORE ACTION",
@@ -1102,11 +1226,6 @@ var neuralAI = {
                 tileY: pacman.tile.y
             }
         );
-
-
-        // =============================================================
-        // APPLY ACTION
-        // =============================================================
 
         if (action === 0)
             pacman.setInputDir(DIR_UP);
@@ -1130,7 +1249,6 @@ var neuralAI = {
             return;
         }
 
-
         console.log(
             "ACTION APPLIED",
             {
@@ -1144,9 +1262,7 @@ var neuralAI = {
             }
         );
 
-
         this.transitionPending = true;
-
 
         setTimeout(
             function () {
@@ -1162,15 +1278,6 @@ var neuralAI = {
         );
     },
 
-
-    // =========================================================================
-    // SEND STATE
-    //
-    // IMPORTANT:
-    // This function NEVER recursively schedules itself.
-    // A single waitUntilPlayable() controls waiting.
-    // =========================================================================
-
     sendState: function () {
 
         if (
@@ -1180,7 +1287,6 @@ var neuralAI = {
             return;
         }
 
-
         if (
             this.waitingForReset ||
             this.transitionPending ||
@@ -1189,21 +1295,14 @@ var neuralAI = {
             return;
         }
 
-
         var gameState =
             this.getGameState();
 
         var playState =
             this.getPlayState();
 
-
-        // =============================================================
-        // GAME OVER
-        // =============================================================
-
         var overState =
             this.getOverState();
-
 
         if (
             typeof gameState !== "undefined" &&
@@ -1219,11 +1318,6 @@ var neuralAI = {
 
             return;
         }
-
-
-        // =============================================================
-        // NOT PLAYABLE
-        // =============================================================
 
         if (
             typeof gameState !== "undefined" &&
@@ -1241,27 +1335,21 @@ var neuralAI = {
             return;
         }
 
-
-        // =============================================================
-        // GET STATE
-        // =============================================================
-
         var stateVector =
             this.getStateVector();
 
-
         if (!stateVector) {
 
-            this.waitUntilPlayable(
+            setTimeout(
                 function () {
 
                     neuralAI.sendState();
-                }
+                },
+                100
             );
 
             return;
         }
-
 
         console.log("Sending state to Python (len: " + stateVector.length + ")");
         this.socket.send(
@@ -1273,14 +1361,6 @@ var neuralAI = {
             })
         );
     },
-
-
-    // =========================================================================
-    // WAIT UNTIL PLAYABLE
-    //
-    // ONE TIMER ONLY.
-    // No infinite chains of sendState().
-    // =========================================================================
 
     waitUntilPlayable: function (callback) {
 
@@ -1311,15 +1391,18 @@ var neuralAI = {
                 neuralAI.waitingForPlayable =
                     false;
 
-                if (typeof neuralAI.playableCallback === "function")
-                    neuralAI.playableCallback();
+                if (typeof neuralAI.playableCallback === "function") {
+
+                    var cb = neuralAI.playableCallback;
+                    neuralAI.playableCallback = null;
+
+                    setTimeout(cb, 0);
+                }
 
                 return;
             }
 
-
             attempts++;
-
 
             if (
                 attempts >=
@@ -1329,15 +1412,12 @@ var neuralAI = {
                 neuralAI.waitingForPlayable =
                     false;
 
-
                 console.warn(
                     "Timed out waiting for playable state."
                 );
 
-
                 return;
             }
-
 
             neuralAI.playableTimer =
                 setTimeout(
@@ -1346,14 +1426,8 @@ var neuralAI = {
                 );
         };
 
-
         check();
     },
-
-
-    // =========================================================================
-    // HANDLE RESET
-    // =========================================================================
 
     handleReset: function () {
 
@@ -1361,12 +1435,10 @@ var neuralAI = {
             "RESET received from Python"
         );
 
-
         this.waitingForReset = true;
         this.waitingForPlayable = false;
         this.transitionPending = false;
         this.terminalSent = false;
-
 
         if (this.playableTimer) {
 
@@ -1377,7 +1449,6 @@ var neuralAI = {
             this.playableTimer = null;
         }
 
-
         if (this.deathTimer) {
 
             clearTimeout(
@@ -1387,12 +1458,12 @@ var neuralAI = {
             this.deathTimer = null;
         }
 
-
         this.previousScore =
             typeof getScore === "function"
                 ? getScore()
                 : 0;
 
+        this.resetTracking();
 
         var gameState =
             this.getGameState();
@@ -1409,79 +1480,56 @@ var neuralAI = {
         var newGameState =
             this.getNewGameState();
 
-
-        // =============================================================
-        // FORCE FULL NEW GAME
-        // =============================================================
-
         if (
             typeof newGameState !== "undefined" &&
             typeof switchState !== "undefined"
         ) {
 
+            console.log(
+                "Starting new RL episode from Level 1 (3 Lives)"
+            );
+
             if (
-                gameState === overState ||
-                gameState === homeState ||
-                gameState === preNewGameState ||
-                gameState === undefined
+                typeof window !== "undefined"
             ) {
 
-                console.log(
-                    "Starting new RL episode from Level 1"
-                );
+                window.practiceMode =
+                    false;
 
+                window.turboMode =
+                    false;
+            }
 
-                if (
-                    typeof window !== "undefined"
-                ) {
+            if (
+                typeof practiceMode !==
+                "undefined"
+            ) {
 
-                    window.practiceMode =
-                        false;
+                practiceMode = false;
+            }
 
-                    window.turboMode =
-                        false;
-                }
+            if (
+                typeof turboMode !==
+                "undefined"
+            ) {
 
+                turboMode = false;
+            }
 
-                if (
-                    typeof practiceMode !==
-                    "undefined"
-                ) {
+            if (
+                typeof newGameState.setStartLevel ===
+                "function"
+            ) {
 
-                    practiceMode = false;
-                }
-
-
-                if (
-                    typeof turboMode !==
-                    "undefined"
-                ) {
-
-                    turboMode = false;
-                }
-
-
-                if (
-                    typeof newGameState.setStartLevel ===
-                    "function"
-                ) {
-
-                    newGameState.setStartLevel(
-                        1
-                    );
-                }
-
-
-                switchState(
-                    newGameState
+                newGameState.setStartLevel(
+                    1
                 );
             }
+
+            switchState(
+                newGameState
+            );
         }
-
-
-        // =============================================================
-        // WAIT FOR PLAY
-        // =============================================================
 
         this.waitUntilPlayable(
             function () {
@@ -1499,16 +1547,10 @@ var neuralAI = {
                     "New episode ready."
                 );
 
-
                 neuralAI.sendState();
             }
         );
     },
-
-
-    // =========================================================================
-    // SEND TRANSITION
-    // =========================================================================
 
     sendTransition: function (
         oldState,
@@ -1526,7 +1568,6 @@ var neuralAI = {
             return;
         }
 
-
         if (
             this.terminalSent
         ) {
@@ -1537,20 +1578,16 @@ var neuralAI = {
             return;
         }
 
-
         var self = this;
-
 
         var currentScore =
             typeof getScore === "function"
                 ? getScore()
                 : 0;
 
-
         var scoreReward =
             currentScore -
             oldScore;
-
 
         var gameState =
             this.getGameState();
@@ -1564,35 +1601,20 @@ var neuralAI = {
         var finishState =
             this.getFinishState();
 
-
-        // =============================================================
-        // DEATH / TERMINAL DETECTION
-        // =============================================================
-
         var isDead =
             typeof gameState !== "undefined" &&
             typeof deadState !== "undefined" &&
             gameState === deadState;
-
 
         var isGameOver =
             typeof gameState !== "undefined" &&
             typeof overState !== "undefined" &&
             gameState === overState;
 
-
         var isLevelComplete =
             typeof gameState !== "undefined" &&
             typeof finishState !== "undefined" &&
             gameState === finishState;
-
-
-        // =============================================================
-        // DEATH STATE
-        //
-        // Wait only here.
-        // Once deadState ends, send exactly one transition.
-        // =============================================================
 
         if (isDead) {
 
@@ -1605,38 +1627,23 @@ var neuralAI = {
             return;
         }
 
-
-        // =============================================================
-        // CALCULATE NEXT STATE
-        // =============================================================
-
         var nextState =
             this.getStateVector();
 
-
         if (!nextState)
             nextState = oldState;
-
-
-        // =============================================================
-        // TERMINAL
-        // =============================================================
 
         var done =
             isGameOver ||
             isLevelComplete;
 
-
         var reward = 0;
-
-
-        // =============================================================
-        // LEVEL COMPLETE
-        // =============================================================
 
         if (isLevelComplete) {
 
             reward = 50;
+
+            this.stepsSinceLastPellet = 0;
 
             console.log(
                 "[AI EVENT] LEVEL COMPLETE",
@@ -1647,14 +1654,11 @@ var neuralAI = {
             );
         }
 
-
-        // =============================================================
-        // GAME OVER
-        // =============================================================
-
         else if (isGameOver) {
 
             reward = -10;
+
+            this.stepsSinceLastPellet = 0;
 
             console.log(
                 "[AI EVENT] GAME OVER",
@@ -1665,14 +1669,10 @@ var neuralAI = {
             );
         }
 
-
-        // =============================================================
-        // GHOST EATEN
-        // =============================================================
-
         else if (scoreReward >= 200) {
 
             reward = 10;
+            this.stepsSinceLastPellet++;
 
             console.log(
                 "[AI EVENT] GHOST_EATEN",
@@ -1683,14 +1683,10 @@ var neuralAI = {
             );
         }
 
-
-        // =============================================================
-        // ENERGIZER
-        // =============================================================
-
         else if (scoreReward === 50) {
 
             reward = 5;
+            this.stepsSinceLastPellet = 0;
 
             console.log(
                 "[AI EVENT] ENERGIZER",
@@ -1701,14 +1697,10 @@ var neuralAI = {
             );
         }
 
-
-        // =============================================================
-        // PELLET
-        // =============================================================
-
         else if (scoreReward === 10) {
 
             reward = 1;
+            this.stepsSinceLastPellet = 0;
 
             console.log(
                 "[AI EVENT] PELLET",
@@ -1718,11 +1710,6 @@ var neuralAI = {
                 }
             );
         }
-
-
-        // =============================================================
-        // MOVEMENT / BLOCKED
-        // =============================================================
 
         else {
 
@@ -1738,13 +1725,13 @@ var neuralAI = {
             var nextY =
                 nextState[1];
 
-
             if (
                 oldX === nextX &&
                 oldY === nextY
             ) {
 
                 reward = -0.05;
+                this.stepsSinceLastPellet += 2;
 
                 console.log(
                     "[AI EVENT] BLOCKED",
@@ -1758,21 +1745,22 @@ var neuralAI = {
 
                 reward = 0;
 
+                this.stepsSinceLastPellet++;
+
+                if (this.stepsSinceLastPellet > 30) {
+                    var stallPenalty = 0.05 * Math.min((this.stepsSinceLastPellet - 30) / 20.0, 1.0);
+                    reward -= stallPenalty;
+                }
+
                 console.log(
                     "[AI EVENT] MOVE",
                     {
-                        reward: reward
+                        reward: reward,
+                        stepsSinceLastPellet: this.stepsSinceLastPellet
                     }
                 );
             }
         }
-
-
-        // =============================================================
-        // GHOST DISTANCE SHAPING
-        //
-        // Only during normal gameplay.
-        // =============================================================
 
         if (
             !done &&
@@ -1781,41 +1769,26 @@ var neuralAI = {
 
             var shapingReward = 0;
 
-
             for (
                 var i = 0;
                 i < 4;
                 i++
             ) {
 
-                // State layout:
-                //
-                // Base = 10
-                //
-                // Ghost i:
-                // dx       = 10 + i*5
-                // dy       = 11 + i*5
-                // dist     = 12 + i*5
-                // scared   = 13 + i*5
-                // dangerous= 14 + i*5
-
                 var oldDist =
                     oldState[
                     12 + i * 5
                     ] * 30;
-
 
                 var nextDist =
                     nextState[
                     12 + i * 5
                     ] * 30;
 
-
                 var isDangerous =
                     nextState[
                     14 + i * 5
                     ] === 1;
-
 
                 if (
                     isDangerous &&
@@ -1840,7 +1813,6 @@ var neuralAI = {
                 }
             }
 
-
             shapingReward =
                 Math.max(
                     -0.8,
@@ -1850,7 +1822,6 @@ var neuralAI = {
                     )
                 );
 
-
             if (
                 shapingReward !== 0
             ) {
@@ -1858,12 +1829,10 @@ var neuralAI = {
                 reward +=
                     shapingReward;
 
-
                 reward =
                     Math.round(
                         reward * 100
                     ) / 100;
-
 
                 console.log(
                     "[AI EVENT] SHAPING",
@@ -1877,21 +1846,14 @@ var neuralAI = {
             }
         }
 
-
-        // =============================================================
-        // SEND TRANSITION
-        // =============================================================
-
         this.previousScore =
             currentScore;
-
 
         if (done) {
 
             this.terminalSent =
                 true;
         }
-
 
         this.socket.send(
             JSON.stringify({
@@ -1910,7 +1872,6 @@ var neuralAI = {
             })
         );
 
-
         console.log(
             "[AI EVENT] TRANSITION SENT",
             {
@@ -1920,14 +1881,8 @@ var neuralAI = {
             }
         );
 
-
         this.transitionPending =
             false;
-
-
-        // =============================================================
-        // NORMAL STEP
-        // =============================================================
 
         if (!done) {
 
@@ -1941,23 +1896,10 @@ var neuralAI = {
             return;
         }
 
-
-        // =============================================================
-        // TERMINAL
-        //
-        // Python server will send RESET.
-        // Do NOT reset here.
-        // =============================================================
-
         console.log(
             "Terminal transition sent. Waiting for Python reset."
         );
     },
-
-
-    // =========================================================================
-    // CONTROLLED DEATH WAIT
-    // =========================================================================
 
     waitForDeathToFinish: function (
         oldState,
@@ -1968,13 +1910,10 @@ var neuralAI = {
         if (this.terminalSent)
             return;
 
-
         if (this.deathTimer)
             return;
 
-
         var attempts = 0;
-
 
         var checkDeath = function () {
 
@@ -1986,11 +1925,6 @@ var neuralAI = {
 
             var overState =
                 neuralAI.getOverState();
-
-
-            // -------------------------------------------------------------
-            // Game already moved to game-over
-            // -------------------------------------------------------------
 
             if (
                 typeof gameState !== "undefined" &&
@@ -2010,11 +1944,6 @@ var neuralAI = {
                 return;
             }
 
-
-            // -------------------------------------------------------------
-            // Still in death animation
-            // -------------------------------------------------------------
-
             if (
                 typeof gameState !== "undefined" &&
                 typeof deadState !== "undefined" &&
@@ -2022,7 +1951,6 @@ var neuralAI = {
             ) {
 
                 attempts++;
-
 
                 if (
                     attempts >=
@@ -2036,7 +1964,6 @@ var neuralAI = {
                     neuralAI.deathTimer =
                         null;
 
-
                     neuralAI.sendForcedDeathTransition(
                         oldState,
                         oldScore,
@@ -2046,25 +1973,17 @@ var neuralAI = {
                     return;
                 }
 
-
                 neuralAI.deathTimer =
                     setTimeout(
                         checkDeath,
                         neuralAI.WAIT_INTERVAL
                     );
 
-
                 return;
             }
 
-
-            // -------------------------------------------------------------
-            // Death sequence finished
-            // -------------------------------------------------------------
-
             neuralAI.deathTimer =
                 null;
-
 
             neuralAI.sendDeathTransition(
                 oldState,
@@ -2073,14 +1992,8 @@ var neuralAI = {
             );
         };
 
-
         checkDeath();
     },
-
-
-    // =========================================================================
-    // NORMAL DEATH TRANSITION
-    // =========================================================================
 
     sendDeathTransition: function (
         oldState,
@@ -2091,20 +2004,16 @@ var neuralAI = {
         if (this.terminalSent)
             return;
 
-
         var nextState =
             this.getStateVector();
 
-
         if (!nextState)
             nextState = oldState;
-
 
         var currentScore =
             typeof getScore === "function"
                 ? getScore()
                 : oldScore;
-
 
         var gameState =
             this.getGameState();
@@ -2112,31 +2021,12 @@ var neuralAI = {
         var overState =
             this.getOverState();
 
-
         var done =
             typeof gameState !== "undefined" &&
             typeof overState !== "undefined" &&
             gameState === overState;
 
-
-        // If the game is no longer in overState,
-        // check whether there are no lives remaining.
-        if (!done) {
-
-            if (
-                typeof extraLives !==
-                "undefined" &&
-                extraLives === 0
-            ) {
-
-                done = true;
-            }
-        }
-
-
-        // A death should always produce negative reward.
         var reward = -10;
-
 
         console.log(
             "[AI EVENT] DEATH",
@@ -2147,14 +2037,13 @@ var neuralAI = {
             }
         );
 
-
         this.terminalSent =
             done;
-
 
         this.previousScore =
             currentScore;
 
+        this.stepsSinceLastPellet = 0;
 
         this.socket.send(
             JSON.stringify({
@@ -2173,7 +2062,6 @@ var neuralAI = {
             })
         );
 
-
         console.log(
             "[AI EVENT] DEATH TRANSITION SENT",
             {
@@ -2182,14 +2070,8 @@ var neuralAI = {
             }
         );
 
-
         this.transitionPending =
             false;
-
-
-        // -------------------------------------------------------------
-        // If this was only a lost life, continue after restart.
-        // -------------------------------------------------------------
 
         if (!done) {
 
@@ -2208,11 +2090,6 @@ var neuralAI = {
         }
     },
 
-
-    // =========================================================================
-    // FORCED DEATH TRANSITION
-    // =========================================================================
-
     sendForcedDeathTransition: function (
         oldState,
         oldScore,
@@ -2222,22 +2099,19 @@ var neuralAI = {
         if (this.terminalSent)
             return;
 
-
         var nextState =
             this.getStateVector();
-
 
         if (!nextState)
             nextState = oldState;
 
-
         this.terminalSent =
             true;
-
 
         this.transitionPending =
             false;
 
+        this.stepsSinceLastPellet = 0;
 
         this.socket.send(
             JSON.stringify({
@@ -2256,17 +2130,11 @@ var neuralAI = {
             })
         );
 
-
         console.warn(
             "Forced terminal death transition sent."
         );
     }
 };
-
-
-// ============================================================================
-// AUTOMATIC START
-// ============================================================================
 
 if (
     typeof window !== "undefined"
@@ -2280,7 +2148,6 @@ if (
 
                 neuralAI.connect();
             }
-
 
             var checkAndStart =
                 function () {
@@ -2300,11 +2167,6 @@ if (
                     var playState =
                         neuralAI.getPlayState();
 
-
-                    // =========================================================
-                    // GAME NEEDS START
-                    // =========================================================
-
                     if (
                         gameState === homeState ||
                         gameState === preNewGameState ||
@@ -2315,7 +2177,6 @@ if (
                         console.log(
                             "Auto-starting Neural Pac-Man"
                         );
-
 
                         if (
                             typeof window !==
@@ -2329,7 +2190,6 @@ if (
                                 false;
                         }
 
-
                         if (
                             typeof practiceMode !==
                             "undefined"
@@ -2339,7 +2199,6 @@ if (
                                 false;
                         }
 
-
                         if (
                             typeof turboMode !==
                             "undefined"
@@ -2348,7 +2207,6 @@ if (
                             turboMode =
                                 false;
                         }
-
 
                         if (
                             typeof newGameState !==
@@ -2372,17 +2230,14 @@ if (
                                     );
                                 }
 
-
                                 switchState(
                                     newGameState
                                 );
                             }
                         }
 
-
                         neuralAI.waitingForReset =
                             true;
-
 
                         neuralAI.waitUntilPlayable(
                             function () {
@@ -2394,14 +2249,8 @@ if (
                             }
                         );
 
-
                         return;
                     }
-
-
-                    // =========================================================
-                    // ALREADY PLAYING
-                    // =========================================================
 
                     if (
                         gameState ===
@@ -2416,23 +2265,16 @@ if (
                         return;
                     }
 
-
-                    // =========================================================
-                    // OTHERWISE WAIT
-                    // =========================================================
-
                     setTimeout(
                         checkAndStart,
                         100
                     );
                 };
 
-
-            // Give game engine time to initialize.
             setTimeout(
                 checkAndStart,
                 500
             );
         }
     );
-}
+}

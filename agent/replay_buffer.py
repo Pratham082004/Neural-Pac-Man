@@ -1,6 +1,9 @@
 import random
 from collections import deque
 
+import numpy as np
+
+
 class ReplayBuffer:
     def __init__(self, capacity=100_000):
         self.buffer = deque(maxlen=capacity)
@@ -11,7 +14,7 @@ class ReplayBuffer:
             action,
             reward,
             next_state,
-            done
+            done,
         )
 
         self.buffer.append(experience)
@@ -22,14 +25,15 @@ class ReplayBuffer:
     def __len__(self):
         return len(self.buffer)
 
+
 if __name__ == "__main__":
 
     buffer = ReplayBuffer(capacity=10)
 
-    state = [0.1] * 26
+    state = np.zeros(72, dtype=np.float32)
     action = 3
-    reward = 10
-    next_state = [0.2] * 26
+    reward = 10.0
+    next_state = np.ones(72, dtype=np.float32)
     done = False
 
     buffer.push(
@@ -37,7 +41,7 @@ if __name__ == "__main__":
         action,
         reward,
         next_state,
-        done
+        done,
     )
 
     print("Buffer size:", len(buffer))
