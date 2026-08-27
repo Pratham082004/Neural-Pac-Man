@@ -2,11 +2,15 @@
 * text=auto eol=lf
 
 # Exclude original game docs, ROM disassemblies (C/Assembly), and third-party assets from GitHub Linguist language statistics
+*.asm linguist-vendored
+*.asm linguist-detectable=false
 game/pacman/doc/** linguist-vendored
 game/pacman/doc/** linguist-documentation
+game/pacman/doc/** linguist-detectable=false
 game/pacman/pacman.js linguist-vendored
 game/pacman/package-lock.json linguist-generated
 game/pacman/promo/** linguist-vendored
 game/pacman/mapgen/** linguist-vendored
 game/pacman/randturn/** linguist-vendored
 checkpoints/** linguist-vendored
+
